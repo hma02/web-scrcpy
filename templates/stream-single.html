@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <title>Device Stream - Web Scrcpy</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: Arial, sans-serif;
+        }
+
+        .header {
+            background-color: #222;
+            color: white;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            border-bottom: 1px solid #444;
+        }
+
+        .device-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .device-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #4caf50;
+        }
+
+        .device-indicator.loading {
+            background-color: #ff9800;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .header-right {
+            display: flex;
+            gap: 15px;
+        }
+
+        .btn-header {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            background-color: #444;
+            color: white;
+            transition: background-color 0.3s;
+        }
+
+        .btn-header:hover {
+            background-color: #555;
+        }
+
+        .video-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        video {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            background: black;
+        }
+
+        .controls-bar {
+            display: flex;
+            gap: 5px;
+            padding: 8px 20px;
+            background-color: #222;
+            border-top: 1px solid #444;
+            flex-wrap: wrap;
+        }
+
+        .control-icon {
+            flex: 1;
+            min-width: 50px;
+            padding: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            color: #eee;
+            border: 1px solid #444;
+            border-radius: 3px;
+            text-align: center;
+            transition: all 0.2s;
+            background-color: #333;
+        }
+
+        .control-icon:hover {
+            background-color: #444;
+            color: #007BFF;
+        }
+    </style>
+    <script src="/static/js/socket.io.js"></script>
+    <script src="/static/js/input.js"></script>
+    <script src="/static/js/exp-golomb.js"></script>
+    <script src="/static/js/h264-sps-parser.js"></script>
+    <script src="/static/js/video_parser.js"></script>
+    <script src="/static/js/jmuxer.min.js"></script>
+</head>
+
+<body>
+    <div class="header">
+        <div class="device-header">
+            <span class="device-indicator loading" id="indicator"></span>
+            <span id="deviceName">Device: Loading...</span>
+        </div>
+        <div class="header-right">
+            <button class="btn-header" onclick="goBack()">← Back</button>
+        </div>
+    </div>
+
+    <div class="video-container">
+        <video id="player" autoplay muted webkit-playsinline playsinline x5-playsinline></video>
+    </div>
+
+    <div class="controls-bar">
+        <button class="control-icon" title="Power" onclick="sendControl('power')">
+            <i class="fa-solid fa-power-off"></i>
+        </button>
+        <button class="control-icon" title="Back" onclick="sendControl('back')">
+            <i class="fa-solid fa-arrow-left"></i>
+        </button>
+        <button class="control-icon" title="Home" onclick="sendControl('home')">
+            <i class="fa-solid fa-house"></i>
+        </button>
+        <button class="control-icon" title="Menu" onclick="sendControl('menu')">
+            <i class="fa-solid fa-bars"></i>
+        </button>
+        <button class="control-icon" title="Volume Down" onclick="sendControl('vol-down')">
+            <i class="fa-solid fa-volume-down"></i>
+        </button>
+        <button class="control-icon" title="Volume Up" onclick="sendControl('vol-up')">
+            <i class="fa-solid fa-volume-up"></i>
+        </button>
+    </div>
+
+    <script>
+        // Get device UDID from URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const deviceUdid = urlParams.get('device');
+
+        if (!deviceUdid) {
+            alert('Device must be specified');
+            window.location.href = '/';
+        }
+
+        document.getElementById('deviceName').textContent = `Device: ${deviceUdid}`;
+
+        // Setup video player
+        const muxer = new JMuxer({
+            node: 'player',
+            mode: 'video',
+            flushingTime: 0,
+            fps: 60,
+            clearBuffer: true,
+            onReady: () => {
+                console.log('MSE ready');
+                const videoElement = document.getElementById('player');
+                if (videoElement) {
+                    videoElement.controls = false;
+                    videoElement.style.cssText = `
+                        -webkit-media-controls: none !important;
+                        -webkit-media-controls-enclosure: none !important;
+                        -webkit-media-controls-panel: none !important;
+                    `;
+                }
+            },
+            onError: (err) => {
+                console.error('MSE Error:', err);
+            }
+        });
+
+        let input = null;
+
+        const parser = new VideoParser(({ type, data }) => {
+            if (type === 'nalu') {
+                muxer.feed({ video: data });
+            } else if (type === 'init') {
+                muxer.feed({ video: data["sps"] });
+                muxer.feed({ video: data["pps"] });
+            } else if (type === 'screen_size') {
+                initInput(data["width"], data["height"]);
+            } else if (type === 'size_change') {
+                if (input) {
+                    input.resizeScreen(data["width"], data["height"]);
+                }
+            }
+        });
+
+        function initInput(width, height) {
+            function input_data_cb(data) {
+                socket.emit('control_data', {
+                    device_udid: deviceUdid,
+                    data: data
+                });
+            }
+
+            const videoElement = document.getElementById('player');
+            input = new ScrcpyInput(input_data_cb, videoElement, width, height, false);
+        }
+
+        function injectKeyCode(keyCode, action) {
+            if (!input) return;
+            try {
+                // Create binary protocol data for key injection
+                const data = input.createKeyProtocolData(action, keyCode, 0, 0);
+                socket.emit('control_data', {
+                    device_udid: deviceUdid,
+                    data: data
+                });
+            } catch (e) {
+                console.error('Error injecting key code:', e);
+            }
+        }
+
+        function sendControl(action) {
+            if (!input) return;
+
+            const keyCodeMap = {
+                'power': () => { input.screen_on_off(0); setTimeout(() => input.screen_on_off(1), 100); },
+                'vol-down': () => { injectKeyCode(25, 0); setTimeout(() => injectKeyCode(25, 1), 100); },
+                'vol-up': () => { injectKeyCode(24, 0); setTimeout(() => injectKeyCode(24, 1), 100); },
+                'back': () => { injectKeyCode(4, 0); setTimeout(() => injectKeyCode(4, 1), 100); },
+                'home': () => { injectKeyCode(3, 0); setTimeout(() => injectKeyCode(3, 1), 100); },
+                'menu': () => { injectKeyCode(82, 0); setTimeout(() => injectKeyCode(82, 1), 100); }
+            };
+
+            if (keyCodeMap[action]) {
+                keyCodeMap[action]();
+            }
+        }
+
+        const socket = io({
+            reconnection: true,
+            autoConnect: true
+        });
+
+        socket.on('video_data', (data) => {
+            if (data.device_udid === deviceUdid) {
+                const newData = new Uint8Array(data.data);
+                parser.appendData(newData);
+            }
+        });
+
+        socket.on('connect', () => {
+            console.log('Connected to server, starting device...');
+            socket.emit('start_device', { device_udid: deviceUdid });
+        });
+
+        socket.on('device_started', (data) => {
+            if (data.device_udid === deviceUdid) {
+                document.getElementById('indicator').classList.remove('loading');
+                console.log('Device started');
+            }
+        });
+
+        socket.on('error', (error) => {
+            console.error('Socket error:', error);
+        });
+
+        socket.on('disconnect', () => {
+            document.getElementById('indicator').classList.add('loading');
+            console.log('Disconnected from server');
+        });
+
+        function goBack() {
+            if (confirm('Stop streaming and go back?')) {
+                socket.emit('stop_device', { device_udid: deviceUdid });
+                socket.disconnect();
+                window.location.href = '/';
+            }
+        }
+
+        window.addEventListener('beforeunload', () => {
+            socket.emit('stop_device', { device_udid: deviceUdid });
+            socket.disconnect();
+        });
+    </script>
+</body>
+
+</html>

@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit, send
 from scrcpy import Scrcpy
 import argparse
@@ -6,9 +6,15 @@ import queue
 # Force inclusion of simple_websocket for threading async_mode in bundled binary
 import simple_websocket  # noqa: F401
 
-scpy_ctx = None
-client_sid = None
-message_queue = queue.Queue()
+# Multi-device support: maps device_udid -> scrcpy instance
+device_contexts = {}
+
+# Maps client_sid -> dict of {device_udid -> queue}
+client_queues = {}
+
+# Maps device_udid -> list of queues for that device (for multi-client support)
+device_video_queues = {}
+
 video_bit_rate = "1024000"
 
 app = Flask(__name__)
@@ -18,58 +24,170 @@ socketio = SocketIO(app, async_mode="threading")
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('device-selector.html')
 
-def video_send_task():
-    global client_sid
-    while client_sid != None:
+@app.route('/stream-single')
+def stream_single():
+    return render_template('stream-single.html')
+
+@app.route('/stream-dual')
+def stream_dual():
+    return render_template('stream-dual.html')
+
+@app.route('/api/devices')
+def get_devices():
+    """Return list of connected devices"""
+    try:
+        scpy_temp = Scrcpy()
+        devices = scpy_temp.list_devices()
+        return jsonify(devices)
+    except Exception as e:
+        print(f"Error getting devices: {e}")
+        return jsonify([]), 500
+
+def video_send_task(client_sid, device_udid):
+    """Send video data for a specific device to a specific client"""
+    while client_sid in client_queues and device_udid in client_queues[client_sid]:
         try:
-            message = message_queue.get(timeout=0.01)
-            socketio.emit('video_data', message, to=client_sid)
+            queue_obj = client_queues[client_sid][device_udid]
+            message = queue_obj.get(timeout=0.01)
+            socketio.emit('video_data', {
+                'device_udid': device_udid,
+                'data': message
+            }, to=client_sid)
         except queue.Empty:
             pass
         except Exception as e:
             print(f"Error sending data: {e}")
         finally:
             socketio.sleep(0.001)
-    print(f"video_send_task stopped")
+    print(f"video_send_task stopped for device {device_udid}")
 
-def send_video_data(data):
-    message_queue.put(data)
+def send_video_data(device_udid, data):
+    """Queue video data for all clients watching this device"""
+    if device_udid in device_video_queues:
+        for q in device_video_queues[device_udid]:
+            try:
+                q.put(data, block=False)
+            except queue.Full:
+                pass  # Skip if queue is full
 
 @socketio.on('connect')
 def handle_connect():
-    global scpy_ctx, client_sid
-    print('Client connected')
-
-    if scpy_ctx is not None:
-        print(f'reject connection, client {scpy_ctx} is already connected')
-        return False
-    else:
-        client_sid = request.sid
-        scpy_ctx = Scrcpy()
-        scpy_ctx.scrcpy_start(send_video_data, video_bit_rate)
-        socketio.start_background_task(video_send_task)
-        print(f'connectioned, client  {scpy_ctx}')
+    client_sid = request.sid
+    print(f'Client {client_sid} connected')
+    # Initialize per-client queue dict
+    client_queues[client_sid] = {}
 
 @socketio.on('disconnect')
 def handle_disconnect(reason=None):
-    """Cleanup scrcpy session when client disconnects."""
-    global scpy_ctx, client_sid
-    print(f'Client disconnected: {reason}, ctx={scpy_ctx}')
-    client_sid = None
-    if scpy_ctx is not None:
-        try:
-            scpy_ctx.scrcpy_stop()
-        except Exception as e:
-            print(f'scrcpy_stop failed: {e}')
-        scpy_ctx = None
-    print('scrcpy cleanup done')
+    """Cleanup when client disconnects."""
+    client_sid = request.sid
+    print(f'Client {client_sid} disconnected: {reason}')
+    
+    # Remove client from all device queues
+    if client_sid in client_queues:
+        for device_udid, q in client_queues[client_sid].items():
+            if device_udid in device_video_queues:
+                try:
+                    device_video_queues[device_udid].remove(q)
+                except ValueError:
+                    pass
+                
+                # If no more clients watching this device, stop it
+                if len(device_video_queues[device_udid]) == 0:
+                    if device_udid in device_contexts:
+                        try:
+                            device_contexts[device_udid].scrcpy_stop()
+                        except Exception as e:
+                            print(f'scrcpy_stop failed for {device_udid}: {e}')
+                        del device_contexts[device_udid]
+                    if device_udid in device_video_queues:
+                        del device_video_queues[device_udid]
+        
+        del client_queues[client_sid]
+    print('Client cleanup done')
+
+@socketio.on('start_device')
+def handle_start_device(data):
+    """Start streaming from a specific device"""
+    client_sid = request.sid
+    device_udid = data.get('device_udid')
+    
+    print(f"Client {client_sid} requesting device {device_udid}")
+    
+    if not device_udid:
+        emit('error', 'device_udid required')
+        return
+    
+    try:
+        # Create scrcpy instance for this device if not already exists
+        if device_udid not in device_contexts:
+            scpy_ctx = Scrcpy(device_udid=device_udid)
+            scpy_ctx.scrcpy_start(
+                lambda data: send_video_data(device_udid, data),
+                video_bit_rate,
+                device_udid=device_udid
+            )
+            device_contexts[device_udid] = scpy_ctx
+            device_video_queues[device_udid] = []
+        
+        # Create queue for this client-device pair
+        q = queue.Queue()
+        client_queues[client_sid][device_udid] = q
+        device_video_queues[device_udid].append(q)
+        
+        # Start video send task
+        socketio.start_background_task(video_send_task, client_sid, device_udid)
+        
+        emit('device_started', {'device_udid': device_udid})
+        print(f"Device {device_udid} started for client {client_sid}")
+        
+    except Exception as e:
+        print(f"Error starting device {device_udid}: {e}")
+        emit('error', f"Failed to start device: {str(e)}")
+
+@socketio.on('stop_device')
+def handle_stop_device(data):
+    """Stop streaming a specific device"""
+    client_sid = request.sid
+    device_udid = data.get('device_udid')
+    
+    print(f"Client {client_sid} stopping device {device_udid}")
+    
+    if client_sid in client_queues and device_udid in client_queues[client_sid]:
+        del client_queues[client_sid][device_udid]
+    
+    # If no more clients watching this device, stop it
+    if device_udid in device_video_queues:
+        if device_udid in client_queues[client_sid]:
+            try:
+                device_video_queues[device_udid].remove(client_queues[client_sid][device_udid])
+            except (ValueError, KeyError):
+                pass
+        
+        if len(device_video_queues[device_udid]) == 0:
+            if device_udid in device_contexts:
+                try:
+                    device_contexts[device_udid].scrcpy_stop()
+                except Exception as e:
+                    print(f'scrcpy_stop failed for {device_udid}: {e}')
+                del device_contexts[device_udid]
+            del device_video_queues[device_udid]
 
 @socketio.on('control_data')
 def handle_control_data(data):
-    global scpy_ctx
-    scpy_ctx.scrcpy_send_control(data)
+    """Route control data to the correct device"""
+    device_udid = data.get('device_udid')
+    control_data = data.get('data')
+    
+    if device_udid in device_contexts:
+        try:
+            device_contexts[device_udid].scrcpy_send_control(control_data)
+        except Exception as e:
+            print(f"Error sending control data to {device_udid}: {e}")
+    else:
+        print(f"Device {device_udid} not found in contexts")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Web server for scrcpy')

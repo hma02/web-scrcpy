@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <title>Select Device - Web Scrcpy</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+        }
+
+        .container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .selector-box {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #999;
+            font-size: 14px;
+        }
+
+        .devices-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+            min-height: 200px;
+        }
+
+        .device-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .device-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            border-color: #667eea;
+        }
+
+        .device-card.selected {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-color: #764ba2;
+            color: white;
+        }
+
+        .device-icon {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .device-card.selected .device-icon {
+            color: white;
+        }
+
+        .device-info {
+            word-break: break-all;
+            font-size: 12px;
+        }
+
+        .device-name {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+        }
+
+        .device-card.selected .device-name {
+            color: white;
+        }
+
+        .device-id {
+            color: #666;
+            font-size: 11px;
+        }
+
+        .device-card.selected .device-id {
+            color: #e0e0e0;
+        }
+
+        .status {
+            padding: 12px;
+            margin-bottom: 20px;
+            border-radius: 6px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status.show {
+            display: block;
+        }
+
+        .status.loading {
+            background-color: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .status.error {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+
+        .status.info {
+            background-color: #f3e5f5;
+            color: #6a1b9a;
+        }
+
+        .status i {
+            margin-right: 8px;
+        }
+
+        .buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 600;
+        }
+
+        .btn-primary {
+            background-color: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background-color: #5568d3;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background-color: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background-color: #e0e0e0;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="selector-box">
+            <div class="header">
+                <h1>📱 Select Device</h1>
+                <p>Choose one or more devices to begin streaming</p>
+            </div>
+
+            <div class="status loading show" id="status">
+                <span class="spinner"></span>
+                <span id="statusText">Scanning for devices...</span>
+            </div>
+
+            <div class="devices-grid" id="devicesList">
+                <!-- Devices will be populated here -->
+            </div>
+
+            <div class="buttons">
+                <button class="btn btn-secondary" onclick="scanDevices()">
+                    <i class="fa-solid fa-rotate"></i> Refresh
+                </button>
+                <button class="btn btn-primary" id="connectBtn" onclick="connectToDevice()" disabled>
+                    <i class="fa-solid fa-play"></i> Connect
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let availableDevices = [];
+        let selectedDevice = null;
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            const statusText = document.getElementById('statusText');
+            
+            status.className = `status show ${type}`;
+            
+            if (type === 'loading') {
+                statusText.innerHTML = `<span class="spinner"></span>${message}`;
+            } else {
+                const icons = {
+                    error: 'fa-circle-exclamation',
+                    info: 'fa-circle-info'
+                };
+                statusText.innerHTML = `<i class="fa-solid ${icons[type]}"></i>${message}`;
+            }
+        }
+
+        async function scanDevices() {
+            showStatus('Scanning for devices...', 'loading');
+            try {
+                const response = await fetch('/api/devices');
+                availableDevices = await response.json();
+
+                if (availableDevices.length === 0) {
+                    showStatus('No devices found. Please connect an Android device via USB.', 'error');
+                    return;
+                }
+
+                if (availableDevices.length === 1) {
+                    showStatus(`Found ${availableDevices.length} device. Select it to begin streaming.`, 'info');
+                } else {
+                    showStatus(`Found ${availableDevices.length} devices. Select one or more to stream.`, 'info');
+                }
+
+                renderDevices();
+            } catch (error) {
+                showStatus(`Error scanning devices: ${error.message}`, 'error');
+                console.error('Scan error:', error);
+            }
+        }
+
+        function renderDevices() {
+            const devicesList = document.getElementById('devicesList');
+            devicesList.innerHTML = '';
+
+            availableDevices.forEach((device, index) => {
+                const card = document.createElement('div');
+                card.className = 'device-card';
+                if (device === selectedDevice) {
+                    card.classList.add('selected');
+                }
+                card.innerHTML = `
+                    <div class="device-icon">
+                        <i class="fa-solid fa-mobile"></i>
+                    </div>
+                    <div class="device-info">
+                        <div class="device-name">${device.substring(0, 15)}</div>
+                        <div class="device-id">${device}</div>
+                    </div>
+                `;
+
+                card.addEventListener('click', () => selectDevice(device, card));
+                devicesList.appendChild(card);
+            });
+        }
+
+        function selectDevice(udid, cardElement) {
+            selectedDevice = udid;
+            document.querySelectorAll('.device-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            cardElement.classList.add('selected');
+            document.getElementById('connectBtn').disabled = false;
+        }
+
+        function connectToDevice() {
+            if (!selectedDevice) {
+                alert('Please select a device first');
+                return;
+            }
+            window.location.href = `/stream-single?device=${encodeURIComponent(selectedDevice)}`;
+        }
+
+        // Auto-scan on page load
+        scanDevices();
+
+        // Scan every 5 seconds
+        setInterval(scanDevices, 5000);
+    </script>
+</body>
+
+</html>
