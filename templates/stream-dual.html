@@ -16,30 +16,44 @@
         body {
             height: 100vh;
             display: flex;
+            flex-direction: column;
             overflow: hidden;
             background-color: #1a1a1a;
             font-family: Arial, sans-serif;
         }
 
         .sidebar {
-            width: 50px;
             background-color: #222;
             border-right: 1px solid #444;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            padding-top: 10px;
+            align-items: flex-start;
+            padding-top: 60px;
+            padding-left: 10px;
+            padding-right: 10px;
             gap: 10px;
-            transition: width 0.3s ease;
-            overflow: hidden;
-            position: relative;
+            transition: left 0.3s ease;
+            overflow-y: auto;
+            overflow-x: hidden;
+            position: fixed;
+            left: -220px;
+            top: 0;
+            width: 220px;
+            height: 100vh;
+            z-index: 1000;
         }
 
         .sidebar.expanded {
-            width: 220px;
-            align-items: flex-start;
-            padding-left: 10px;
-            padding-right: 10px;
+            left: 0;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            overflow: hidden;
+            background-color: #1a1a1a;
         }
 
         .sidebar-toggle {
@@ -55,6 +69,10 @@
             justify-content: center;
             font-size: 18px;
             transition: background-color 0.2s;
+            position: fixed;
+            left: 10px;
+            top: 10px;
+            z-index: 1001;
         }
 
         .sidebar-toggle:hover {
@@ -69,6 +87,8 @@
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.3s ease;
+            overflow-y: auto;
+            flex: 1;
         }
 
         .sidebar.expanded .sidebar-content {
@@ -178,12 +198,14 @@
             flex: 1;
             display: flex;
             gap: 2px;
-            overflow: hidden;
+            overflow-y: auto;
+            overflow-x: hidden;
             flex-direction: row;
         }
 
         .stream-panel {
             flex: 1;
+            min-width: 0;
             display: flex;
             flex-direction: column;
             background-color: #000;
@@ -257,20 +279,27 @@
         }
 
         @media (max-width: 1024px) {
+            body {
+                height: auto;
+                min-height: 100vh;
+            }
+
+            .main-content {
+                height: auto;
+                min-height: 100vh;
+            }
+
             .video-container {
                 flex-direction: column;
+                align-items: stretch;
+                height: auto;
             }
 
             .stream-panel {
                 flex: 1;
-            }
-
-            .sidebar {
-                width: 40px;
-            }
-
-            .sidebar.expanded {
-                width: 200px;
+                width: 100%;
+                min-height: 50vh;
+                min-width: unset;
             }
         }
     </style>
@@ -283,10 +312,13 @@
 </head>
 
 <body>
+    <button class="sidebar-toggle" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i></button>
+    
     <div class="sidebar" id="sidebar">
-        <button class="sidebar-toggle" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i></button>
-        
         <div class="sidebar-content">
+            <!-- Back Button at Top -->
+            <button class="sidebar-button" onclick="goBack()">← Back to Menu</button>
+
             <!-- Device 1 Info -->
             <div class="device-section">
                 <div class="device-header">
@@ -320,24 +352,23 @@
                     <button class="mini-control-button" title="Volume Up" onclick="sendControl(2, 'vol-up')">🔼 Vol+</button>
                 </div>
             </div>
-
-            <!-- Back Button -->
-            <button class="sidebar-button" onclick="goBack()">← Back to Menu</button>
         </div>
     </div>
 
-    <div class="video-container">
-        <!-- Device 1 -->
-        <div class="stream-panel">
-            <div class="stream-content">
-                <video id="player1" autoplay muted webkit-playsinline playsinline x5-playsinline></video>
+    <div class="main-content">
+        <div class="video-container">
+            <!-- Device 1 -->
+            <div class="stream-panel">
+                <div class="stream-content">
+                    <video id="player1" autoplay muted webkit-playsinline playsinline x5-playsinline></video>
+                </div>
             </div>
-        </div>
 
-        <!-- Device 2 -->
-        <div class="stream-panel">
-            <div class="stream-content">
-                <video id="player2" autoplay muted webkit-playsinline playsinline x5-playsinline></video>
+            <!-- Device 2 -->
+            <div class="stream-panel">
+                <div class="stream-content">
+                    <video id="player2" autoplay muted webkit-playsinline playsinline x5-playsinline></video>
+                </div>
             </div>
         </div>
     </div>
