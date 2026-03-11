@@ -240,7 +240,7 @@
 
     <script>
         let availableDevices = [];
-        let selectedDevice = null;
+        let selectedDevices = [];
 
         function showStatus(message, type) {
             const status = document.getElementById('status');
@@ -273,7 +273,7 @@
                 if (availableDevices.length === 1) {
                     showStatus(`Found ${availableDevices.length} device. Select it to begin streaming.`, 'info');
                 } else {
-                    showStatus(`Found ${availableDevices.length} devices. Select one or more to stream.`, 'info');
+                    showStatus(`Found ${availableDevices.length} devices. Select one or more to stream (max 2 for dual-view).`, 'info');
                 }
 
                 renderDevices();
@@ -290,12 +290,13 @@
             availableDevices.forEach((device, index) => {
                 const card = document.createElement('div');
                 card.className = 'device-card';
-                if (device === selectedDevice) {
+                if (selectedDevices.includes(device)) {
                     card.classList.add('selected');
                 }
                 card.innerHTML = `
                     <div class="device-icon">
                         <i class="fa-solid fa-mobile"></i>
+                        ${selectedDevices.includes(device) ? `<div style="position: absolute; top: 5px; right: 5px; background: #4CAF50; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold;">${selectedDevices.indexOf(device) + 1}</div>` : ''}
                     </div>
                     <div class="device-info">
                         <div class="device-name">${device.substring(0, 15)}</div>
@@ -303,26 +304,53 @@
                     </div>
                 `;
 
-                card.addEventListener('click', () => selectDevice(device, card));
+                card.addEventListener('click', () => toggleDevice(device, card));
                 devicesList.appendChild(card);
             });
+
+            updateConnectButton();
         }
 
-        function selectDevice(udid, cardElement) {
-            selectedDevice = udid;
-            document.querySelectorAll('.device-card').forEach(card => {
-                card.classList.remove('selected');
-            });
-            cardElement.classList.add('selected');
-            document.getElementById('connectBtn').disabled = false;
+        function toggleDevice(udid, cardElement) {
+            if (selectedDevices.includes(udid)) {
+                selectedDevices = selectedDevices.filter(d => d !== udid);
+                cardElement.classList.remove('selected');
+            } else {
+                if (selectedDevices.length < 2) {
+                    selectedDevices.push(udid);
+                    cardElement.classList.add('selected');
+                } else {
+                    alert('Maximum 2 devices can be selected for dual-view. Please deselect one device first.');
+                    return;
+                }
+            }
+            renderDevices();
+        }
+
+        function updateConnectButton() {
+            const connectBtn = document.getElementById('connectBtn');
+            connectBtn.disabled = selectedDevices.length === 0;
+            
+            if (selectedDevices.length === 1) {
+                connectBtn.innerHTML = '<i class="fa-solid fa-play"></i> Connect (Single)';
+            } else if (selectedDevices.length === 2) {
+                connectBtn.innerHTML = '<i class="fa-solid fa-play"></i> Connect (Dual)';
+            } else {
+                connectBtn.innerHTML = '<i class="fa-solid fa-play"></i> Connect';
+            }
         }
 
         function connectToDevice() {
-            if (!selectedDevice) {
-                alert('Please select a device first');
+            if (selectedDevices.length === 0) {
+                alert('Please select at least one device');
                 return;
             }
-            window.location.href = `/stream-single?device=${encodeURIComponent(selectedDevice)}`;
+
+            if (selectedDevices.length === 1) {
+                window.location.href = `/stream-single?device=${encodeURIComponent(selectedDevices[0])}`;
+            } else if (selectedDevices.length === 2) {
+                window.location.href = `/stream-dual?device1=${encodeURIComponent(selectedDevices[0])}&device2=${encodeURIComponent(selectedDevices[1])}`;
+            }
         }
 
         // Auto-scan on page load
