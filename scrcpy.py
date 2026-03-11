@@ -108,7 +108,7 @@ class Scrcpy:
         cmd = [
             ADB_PATH, "-s", device, "shell",
             f"CLASSPATH={DEVICE_SERVER_PATH} app_process / com.genymobile.scrcpy.Server 3.1 "
-            f"tunnel_forward=true log_level=VERBOSE video_bit_rate=" + self.video_bit_rate
+            f"tunnel_forward=true log_level=VERBOSE video_bit_rate=" + self.video_bit_rate + " max_fps=" + str(self.max_fps)
         ]
         self.android_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -248,11 +248,12 @@ class Scrcpy:
         
         raise Exception(f"{socket_type} connection failed")
 
-    def scrcpy_start(self, video_callback, video_bit_rate, device_udid=None):
+    def scrcpy_start(self, video_callback, video_bit_rate, max_fps , device_udid=None):
         if device_udid:
             self.device_udid = device_udid
             
         self.video_bit_rate = video_bit_rate
+        self.max_fps = max_fps
         self.video_callback = video_callback
         self.stop = False
 

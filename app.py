@@ -15,7 +15,8 @@ client_queues = {}
 # Maps device_udid -> list of queues for that device (for multi-client support)
 device_video_queues = {}
 
-video_bit_rate = "1024000"
+video_bit_rate = "256000"
+max_fps = 10
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
@@ -137,6 +138,7 @@ def handle_start_device(data):
             scpy_ctx.scrcpy_start(
                 lambda data: send_video_data(device_udid, data),
                 video_bit_rate,
+                max_fps,
                 device_udid=device_udid
             )
             device_contexts[device_udid] = scpy_ctx
@@ -201,8 +203,10 @@ def handle_control_data(data):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Web server for scrcpy')
-    parser.add_argument('--video_bit_rate', default="1024000", help='scrcpy video bit rate')
-    parser.add_argument('--port', type=int, default=5000, help='port to bind the web server to')
+    parser.add_argument('--video_bit_rate', default="512000", help='scrcpy video bit rate')
+    parser.add_argument('--max_fps', type=int, default=10, help='scrcpy max FPS')
+    parser.add_argument('--port', type=int, default=5011, help='port to bind the web server to')
     args = parser.parse_args()
     video_bit_rate = args.video_bit_rate
+    max_fps = args.max_fps
     socketio.run(app, host='0.0.0.0', port=args.port)
