@@ -38,25 +38,52 @@ class VideoParser {
                         data: { "name": this.name }
                     });
                 }
-                startIndex = 64;
+                // Immediately slice buffer to remove device name bytes
+                this.buffer = this.buffer.slice(64);
+                // Recursively call to process width/height immediately
+                this.scrcpyProcessBuffer();
+                return;
             }
         } else if (this.width == null) {
             if (this.buffer.length >= 12) {
-                const id = new DataView(this.buffer.buffer).getInt32(0, false);
-                this.width = new DataView(this.buffer.buffer).getInt32(4, false);
-                this.height = new DataView(this.buffer.buffer).getInt32(8, false);
-                console.log("width:" + this.width + " height:" + this.height);
-                if (this.onNaluCallback) {
-                    this.onNaluCallback({
-                        type: 'screen_size',
-                        data: { "width": this.width, "height": this.height }
-                    });
+                try {
+                    const id = new DataView(this.buffer.buffer, this.buffer.byteOffset).getInt32(0, false);
+                    this.width = new DataView(this.buffer.buffer, this.buffer.byteOffset).getInt32(4, false);
+                    this.height = new DataView(this.buffer.buffer, this.buffer.byteOffset).getInt32(8, false);
+                    
+                    // Validate dimensions - if insane values, use fallback
+                    if (this.width > 5000 || this.height > 5000 || this.width < 100 || this.height < 100) {
+                        console.warn("Invalid dimensions detected:", this.width, this.height, "- using fallback 720x1400");
+                        this.width = 720;
+                        this.height = 1400;
+                    }
+                    
+                    console.log("width:" + this.width + " height:" + this.height);
+                    if (this.onNaluCallback) {
+                        this.onNaluCallback({
+                            type: 'screen_size',
+                            data: { "width": this.width, "height": this.height }
+                        });
+                    }
+                    startIndex = 12;
+                    // Immediately slice buffer to remove width/height bytes
+                    this.buffer = this.buffer.slice(startIndex);
+                    // Recursively call to process video frames immediately
+                    this.scrcpyProcessBuffer();
+                    return;
+                } catch (e) {
+                    console.error("Error parsing width/height:", e);
+                    // Use fallback dimensions
+                    this.width = 720;
+                    this.height = 1400;
+                    this.buffer = this.buffer.slice(12);
+                    this.scrcpyProcessBuffer();
+                    return;
                 }
-                startIndex += 12;
             }
         } else while (this.buffer.length - startIndex > 12) {
             // const flag = new DataView(this.buffer.buffer).getInt64(0, false);
-            const size = new DataView(this.buffer.buffer).getInt32(startIndex + 8, false);
+            const size = new DataView(this.buffer.buffer, this.buffer.byteOffset).getInt32(startIndex + 8, false);
             if (this.buffer.length - startIndex >= 12 + size) {
                 const nalu = this.buffer.slice(startIndex + 12, startIndex + 12 + size);
                 this.processBuffer(nalu)
