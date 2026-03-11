@@ -122,7 +122,17 @@ def handle_start_device(data):
     
     try:
         # Create scrcpy instance for this device if not already exists
-        if device_udid not in device_contexts:
+        # OR if existing instance is not running (was stopped)
+        if device_udid not in device_contexts or not device_contexts[device_udid].running:
+            # Clean up old instance if it exists
+            if device_udid in device_contexts:
+                try:
+                    device_contexts[device_udid].scrcpy_stop()
+                except:
+                    pass
+                del device_contexts[device_udid]
+            
+            # Create fresh instance
             scpy_ctx = Scrcpy(device_udid=device_udid)
             scpy_ctx.scrcpy_start(
                 lambda data: send_video_data(device_udid, data),

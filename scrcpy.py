@@ -26,6 +26,8 @@ class Scrcpy:
         self.device_udid = device_udid  # device to use
         self.selected_device = None     # selected device details
         self.device_port = None         # port for this device
+        self.stop = False
+        self.running = False  # Flag to track if this instance is actively streaming
 
     def list_devices(self):
         """Populate self.devices and assign unique local ports per device."""
@@ -201,6 +203,51 @@ class Scrcpy:
                 break
         print("Control connection stopped")
 
+    def _connect_with_retry(self, socket_type, max_retries=30, retry_delay=0.5):
+        """Connect to localhost:device_port with retry logic that verifies connection is alive."""
+        sock = None
+        
+        for attempt in range(max_retries):
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.connect(('localhost', self.device_port))
+                
+                # Verify connection is alive by trying non-blocking recv
+                # If we get 0 bytes, socket was closed by peer (scrcpy not ready)
+                sock.setblocking(False)
+                try:
+                    data = sock.recv(1)
+                    if len(data) == 0:
+                        # Connection closed by peer - scrcpy server not ready yet
+                        sock.close()
+                        if attempt < max_retries - 1:
+                            wait_time = min(retry_delay * (1.5 ** attempt), 5.0)
+                            time.sleep(wait_time)
+                        continue
+                except BlockingIOError:
+                    # No data yet (EAGAIN) - this is normal, socket is alive
+                    pass
+                
+                sock.setblocking(True)
+                print(f"{socket_type} connection established after {attempt} attempts")
+                return sock
+                
+            except (ConnectionRefusedError, OSError) as e:
+                if sock:
+                    try:
+                        sock.close()
+                    except:
+                        pass
+                    sock = None
+                if attempt < max_retries - 1:
+                    wait_time = min(retry_delay * (1.5 ** attempt), 5.0)
+                    time.sleep(wait_time)
+                else:
+                    raise Exception(f"{socket_type} connection failed after {max_retries} attempts")
+        
+        raise Exception(f"{socket_type} connection failed")
+
     def scrcpy_start(self, video_callback, video_bit_rate, device_udid=None):
         if device_udid:
             self.device_udid = device_udid
@@ -229,59 +276,74 @@ class Scrcpy:
         self.setup_adb_forward()
         self.android_thread = Thread(target=self.start_server, daemon=True)
         self.android_thread.start()
-        time.sleep(1)
+        
+        # CRITICAL: Wait for server to initialize on device
+        print("Waiting 3s for server to initialize...")
+        time.sleep(3)
 
-        # video connection
-        self.video_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.video_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self.video_socket.connect(('localhost', self.device_port))
-        print("Video connection established")
+        try:
+            # video connection with retry
+            self.video_socket = self._connect_with_retry("Video", max_retries=30, retry_delay=0.5)
 
-        # audio connection
-        self.audio_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.audio_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self.audio_socket.connect(('localhost', self.device_port))
-        print("Audio connection established")
+            # audio connection with retry
+            self.audio_socket = self._connect_with_retry("Audio", max_retries=30, retry_delay=0.5)
 
-        # control connection
-        self.control_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.control_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self.control_socket.connect(('localhost', self.device_port))
-        print("Control connection established")
+            # control connection with retry
+            self.control_socket = self._connect_with_retry("Control", max_retries=30, retry_delay=0.5)
 
-        self.video_thread = Thread(target=self.receive_video_data, daemon=True)
-        self.audio_thread = Thread(target=self.receive_audio_data, daemon=True)
-        self.control_thread = Thread(target=self.handle_control_conn, daemon=True)
-        self.video_thread.start()
-        self.audio_thread.start()
-        self.control_thread.start()
-        print("Background tasks started")
+            self.video_thread = Thread(target=self.receive_video_data, daemon=True)
+            self.audio_thread = Thread(target=self.receive_audio_data, daemon=True)
+            self.control_thread = Thread(target=self.handle_control_conn, daemon=True)
+            self.video_thread.start()
+            self.audio_thread.start()
+            self.control_thread.start()
+            print("Background tasks started")
+            self.running = True  # Mark instance as successfully running
+        except Exception as e:
+            print(f"Failed to connect: {e}")
+            self.scrcpy_stop()
+            raise
 
     def scrcpy_stop(self):
         print("Stopping Scrcpy")
         self.stop = True
+        self.running = False  # Mark as no longer running
         
+        # Close sockets first (will cause receive threads to exit)
         try:
             if self.control_socket:
-                self.control_socket.shutdown(socket.SHUT_RDWR)
+                try:
+                    self.control_socket.shutdown(socket.SHUT_RDWR)
+                except:
+                    pass
                 self.control_socket.close()
+                self.control_socket = None
         except Exception as e:
             print(f"Control socket shutdown error: {e}")
         
         try:
             if self.audio_socket:
-                self.audio_socket.shutdown(socket.SHUT_RDWR)
+                try:
+                    self.audio_socket.shutdown(socket.SHUT_RDWR)
+                except:
+                    pass
                 self.audio_socket.close()
+                self.audio_socket = None
         except Exception as e:
             print(f"Audio socket shutdown error: {e}")
         
         try:
             if self.video_socket:
-                self.video_socket.shutdown(socket.SHUT_RDWR)
+                try:
+                    self.video_socket.shutdown(socket.SHUT_RDWR)
+                except:
+                    pass
                 self.video_socket.close()
+                self.video_socket = None
         except Exception as e:
             print(f"Video socket shutdown error: {e}")
 
+        # Wait for threads to exit
         try:
             if self.video_thread and self.video_thread.is_alive():
                 self.video_thread.join(timeout=2)
