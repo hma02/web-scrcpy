@@ -177,6 +177,16 @@
             flex-wrap: wrap;
         }
 
+        .debug-status {
+            padding: 6px 20px;
+            background: #111;
+            border-top: 1px solid #333;
+            color: #9ad;
+            font-size: 12px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+
         .control-icon {
             flex: 1;
             min-width: 50px;
@@ -263,6 +273,7 @@
             <i class="fa-solid fa-volume-up"></i>
         </button>
     </div>
+    <div id="debugStatus" class="debug-status"></div>
 
     <script>
         // Get device UDID from URL parameters
@@ -307,6 +318,7 @@
         let stallPromptShown = false;
         let awaitingClipboard = false;
         let autoResumeInProgress = false;
+        let streamState = 'stopped-streaming';
 
         const parser = new VideoParser(({ type, data }) => {
             if (type === 'nalu') {
@@ -426,6 +438,7 @@
                 parser.appendData(newData);
                 lastVideoDataAt = Date.now();
                 stallPromptShown = false;
+                streamState = 'streaming';
                 document.getElementById('stalledOverlay').classList.remove('visible');
             }
         });
@@ -438,6 +451,7 @@
         socket.on('device_started', (data) => {
             if (data.device_udid === deviceUdid) {
                 document.getElementById('indicator').classList.remove('loading');
+                streamState = 'streaming';
                 console.log('Device started');
             }
         });
@@ -468,11 +482,13 @@
             document.getElementById('indicator').classList.add('loading');
             pendingDefaultScreenOff = true;
             stallPromptShown = false;
+            streamState = 'stopped-streaming';
             console.log('Disconnected from server');
         });
 
         function reconnectStream() {
             dismissStalledOverlay();
+            streamState = 'stopped-streaming';
             socket.emit('stop_device', { device_udid: deviceUdid });
             setTimeout(() => {
                 socket.emit('start_device', { device_udid: deviceUdid });
@@ -483,6 +499,7 @@
             if (autoResumeInProgress) return;
             autoResumeInProgress = true;
             console.log(`Attempting auto-resume reconnect (${reason})...`);
+            streamState = 'stopped-streaming';
             socket.emit('stop_device', { device_udid: deviceUdid });
             setTimeout(() => {
                 socket.emit('start_device', { device_udid: deviceUdid });
@@ -504,6 +521,7 @@
             if (Date.now() - lastVideoDataAt > stalledThresholdMs && !stallPromptShown) {
                 document.getElementById('stalledOverlay').classList.add('visible');
                 stallPromptShown = true;
+                streamState = 'stopped-streaming';
             }
             if (awaitingClipboard && Date.now() - lastVideoDataAt > 120000) {
                 awaitingClipboard = false;
@@ -524,6 +542,26 @@
                 }
             }, 2500);
         });
+
+        function updateDebugStatus() {
+            const attention = document.visibilityState === 'visible' ? 'on' : 'off';
+            const connected = socket.connected ? 'connected' : 'disconnected';
+            const secondsSinceFrame = ((Date.now() - lastVideoDataAt) / 1000).toFixed(1);
+            const line = [
+                `stream=${streamState}`,
+                `attention=${attention}`,
+                `socket=${connected}`,
+                `last_frame_age_s=${secondsSinceFrame}`,
+                `stall_prompt=${stallPromptShown ? 'on' : 'off'}`,
+                `auto_resume=${autoResumeInProgress ? 'running' : 'idle'}`,
+                `screen_power=${screenPowerOn ? 'on' : 'off'}`,
+                `awaiting_clipboard=${awaitingClipboard ? 'yes' : 'no'}`
+            ].join(' | ');
+            document.getElementById('debugStatus').textContent = line;
+        }
+
+        setInterval(updateDebugStatus, 500);
+        updateDebugStatus();
 
         function goBack() {
             if (confirm('Stop streaming and go back?')) {

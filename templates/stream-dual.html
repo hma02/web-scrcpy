@@ -289,6 +289,16 @@
             padding: 2px 0 4px 0;
         }
 
+        .debug-status {
+            padding: 8px 10px;
+            background: #111;
+            border-top: 1px solid #333;
+            color: #9ad;
+            font-size: 12px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+
         @media (max-width: 1024px) {
             body {
                 display: flex;
@@ -419,6 +429,7 @@
                 </div>
             </div>
         </div>
+        <div id="debugStatusDual" class="debug-status"></div>
     </div>
 
     <script>
@@ -453,6 +464,7 @@
         const lastVideoDataAt = { 1: Date.now(), 2: Date.now() };
         const stallPromptShown = { 1: false, 2: false };
         const autoResumeInProgress = { 1: false, 2: false };
+        const streamState = { 1: 'stopped-streaming', 2: 'stopped-streaming' };
 
         // Initialize muxer and parser for each device
         Object.keys(devices).forEach(deviceNum => {
@@ -595,6 +607,7 @@
                 parsers[deviceNum].appendData(newData);
                 lastVideoDataAt[deviceNum] = Date.now();
                 stallPromptShown[deviceNum] = false;
+                streamState[deviceNum] = 'streaming';
             }
         });
 
@@ -625,9 +638,11 @@
         socket.on('device_started', (data) => {
             if (data.device_udid === device1Udid) {
                 document.getElementById('indicator1').classList.remove('loading');
+                streamState[1] = 'streaming';
                 console.log('Device 1 started');
             } else if (data.device_udid === device2Udid) {
                 document.getElementById('indicator2').classList.remove('loading');
+                streamState[2] = 'streaming';
                 console.log('Device 2 started');
             }
         });
@@ -643,11 +658,14 @@
             pendingDefaultScreenOff[2] = true;
             stallPromptShown[1] = false;
             stallPromptShown[2] = false;
+            streamState[1] = 'stopped-streaming';
+            streamState[2] = 'stopped-streaming';
             console.log('Disconnected from server');
         });
 
         function reconnectDevice(deviceNum) {
             const udid = devices[deviceNum].udid;
+            streamState[deviceNum] = 'stopped-streaming';
             socket.emit('stop_device', { device_udid: udid });
             setTimeout(() => {
                 socket.emit('start_device', { device_udid: udid });
@@ -676,6 +694,7 @@
                     } else {
                         lastVideoDataAt[deviceNum] = Date.now();
                     }
+                    streamState[deviceNum] = 'stopped-streaming';
                 }
             });
         }, 5000);
@@ -695,6 +714,20 @@
                 });
             }, 2500);
         });
+
+        function updateDebugStatus() {
+            const attention = document.visibilityState === 'visible' ? 'on' : 'off';
+            const socketState = socket.connected ? 'connected' : 'disconnected';
+            const age1 = ((Date.now() - lastVideoDataAt[1]) / 1000).toFixed(1);
+            const age2 = ((Date.now() - lastVideoDataAt[2]) / 1000).toFixed(1);
+            const line1 = `attention=${attention} | socket=${socketState}`;
+            const line2 = `d1 stream=${streamState[1]} frame_age_s=${age1} stall_prompt=${stallPromptShown[1] ? 'on' : 'off'} auto_resume=${autoResumeInProgress[1] ? 'running' : 'idle'} screen_power=${screenPowerOn[1] ? 'on' : 'off'}`;
+            const line3 = `d2 stream=${streamState[2]} frame_age_s=${age2} stall_prompt=${stallPromptShown[2] ? 'on' : 'off'} auto_resume=${autoResumeInProgress[2] ? 'running' : 'idle'} screen_power=${screenPowerOn[2] ? 'on' : 'off'}`;
+            document.getElementById('debugStatusDual').textContent = `${line1}\n${line2}\n${line3}`;
+        }
+
+        setInterval(updateDebugStatus, 500);
+        updateDebugStatus();
 
         function goBack() {
             if (confirm('Stop streaming both devices and go back?')) {
