@@ -28,6 +28,8 @@ class Scrcpy:
         self.device_port = None         # port for this device
         self.stop = False
         self.running = False  # Flag to track if this instance is actively streaming
+        self.device_message_callback = None
+        self.control_recv_buffer = bytearray()
 
     def list_devices(self):
         """Populate self.devices and assign unique local ports per device."""
@@ -194,7 +196,7 @@ class Scrcpy:
                 if not data:
                     break
                 if data:
-                    print("Control Mesg:", data)
+                    self._process_device_message(data)
             except socket.timeout:
                 # Timeout is normal, just loop again to check self.stop
                 continue
@@ -202,6 +204,50 @@ class Scrcpy:
                 print(f"Control recv error: {e}")
                 break
         print("Control connection stopped")
+
+    def _process_device_message(self, data):
+        self.control_recv_buffer.extend(data)
+        magic = b"scrcpy_message"
+        magic_len = len(magic)
+
+        while True:
+            idx = self.control_recv_buffer.find(magic)
+            if idx < 0:
+                # Keep tail in case part of magic arrives split across packets
+                if len(self.control_recv_buffer) > magic_len:
+                    del self.control_recv_buffer[:-magic_len]
+                return
+            if idx > 0:
+                del self.control_recv_buffer[:idx]
+            if len(self.control_recv_buffer) < magic_len + 1:
+                return
+
+            msg_type = self.control_recv_buffer[magic_len]
+            if msg_type == 0:  # clipboard
+                if len(self.control_recv_buffer) < magic_len + 5:
+                    return
+                text_len = int.from_bytes(
+                    self.control_recv_buffer[magic_len + 1:magic_len + 5],
+                    byteorder='big',
+                    signed=True
+                )
+                total_len = magic_len + 1 + 4 + max(0, text_len)
+                if len(self.control_recv_buffer) < total_len:
+                    return
+                text_start = magic_len + 5
+                text_end = text_start + max(0, text_len)
+                text = bytes(self.control_recv_buffer[text_start:text_end]).decode('utf-8', errors='replace')
+                if self.device_message_callback:
+                    self.device_message_callback({'type': 'clipboard', 'text': text})
+                del self.control_recv_buffer[:total_len]
+            elif msg_type == 101:  # file push response
+                total_len = magic_len + 1 + 2 + 1
+                if len(self.control_recv_buffer) < total_len:
+                    return
+                del self.control_recv_buffer[:total_len]
+            else:
+                # Unknown payload; discard this magic marker and continue.
+                del self.control_recv_buffer[:magic_len + 1]
 
     def _connect_with_retry(self, socket_type, max_retries=30, retry_delay=0.5):
         """Connect to localhost:device_port with retry logic that verifies connection is alive."""
@@ -248,13 +294,15 @@ class Scrcpy:
         
         raise Exception(f"{socket_type} connection failed")
 
-    def scrcpy_start(self, video_callback, video_bit_rate, max_fps , device_udid=None):
+    def scrcpy_start(self, video_callback, video_bit_rate, max_fps, device_message_callback=None, device_udid=None):
         if device_udid:
             self.device_udid = device_udid
             
         self.video_bit_rate = video_bit_rate
         self.max_fps = max_fps
         self.video_callback = video_callback
+        self.device_message_callback = device_message_callback
+        self.control_recv_buffer = bytearray()
         self.stop = False
 
         result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True)

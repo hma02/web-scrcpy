@@ -94,22 +94,7 @@
             display: block;
         }
 
-        .settings-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-top: 8px;
-        }
-
-        .settings-grid label {
-            font-size: 12px;
-            color: #ddd;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .settings-grid input {
+        .settings-panel textarea {
             background: #2c2c2c;
             color: #fff;
             border: 1px solid #555;
@@ -117,6 +102,8 @@
             padding: 6px;
             font-size: 12px;
             width: 100%;
+            margin-top: 8px;
+            min-height: 70px;
         }
 
         .settings-actions {
@@ -200,30 +187,16 @@
         </div>
     </div>
 
-    <div class="video-container">
+        <div class="video-container">
         <div class="settings-panel" id="settingsPanel">
-            <strong style="color:#fff;font-size:13px;">Live stream settings</strong>
-            <div class="settings-grid">
-                <label>Bitrate (bps)
-                    <input id="settingBitrate" type="number" min="100000" step="100000" value="512000">
-                </label>
-                <label>Max FPS
-                    <input id="settingMaxFps" type="number" min="1" max="120" step="1" value="10">
-                </label>
-                <label>I-frame interval (s)
-                    <input id="settingIFrameInterval" type="number" min="1" max="120" step="1" value="10">
-                </label>
-                <label>Max width (px)
-                    <input id="settingMaxWidth" type="number" min="16" step="16" value="1080">
-                </label>
-                <label>Max height (px)
-                    <input id="settingMaxHeight" type="number" min="16" step="16" value="1920">
-                </label>
-            </div>
+            <strong style="color:#fff;font-size:13px;">Device controls</strong>
+            <textarea id="deviceTextInput" placeholder="Type text for clipboard or 'send as keys'"></textarea>
             <div class="settings-actions">
-                <button class="btn-header" onclick="applyStreamSettings()">Apply</button>
                 <button class="btn-header" onclick="setScreenPowerMode(false)">Screen OFF (keep stream)</button>
                 <button class="btn-header" onclick="setScreenPowerMode(true)">Screen ON</button>
+                <button class="btn-header" onclick="sendClipboardToDevice()">Set clipboard</button>
+                <button class="btn-header" onclick="requestClipboardFromDevice()">Get clipboard</button>
+                <button class="btn-header" onclick="sendTextAsKeys()">Send as keys</button>
             </div>
             <div id="settingsStatus" class="status-text"></div>
         </div>
@@ -288,8 +261,7 @@
         });
 
         let input = null;
-        let latestScreenWidth = 1080;
-        let latestScreenHeight = 1920;
+        let pendingDefaultScreenOff = true;
 
         const parser = new VideoParser(({ type, data }) => {
             if (type === 'nalu') {
@@ -298,16 +270,11 @@
                 muxer.feed({ video: data["sps"] });
                 muxer.feed({ video: data["pps"] });
             } else if (type === 'screen_size') {
-                latestScreenWidth = data["width"];
-                latestScreenHeight = data["height"];
                 initInput(data["width"], data["height"]);
-                preloadSettingsFromScreenSize();
             } else if (type === 'size_change') {
                 if (input) {
                     input.resizeScreen(data["width"], data["height"]);
                 }
-                latestScreenWidth = data["width"];
-                latestScreenHeight = data["height"];
             }
         });
 
@@ -321,6 +288,11 @@
 
             const videoElement = document.getElementById('player');
             input = new ScrcpyInput(input_data_cb, videoElement, width, height, false);
+            if (pendingDefaultScreenOff) {
+                setTimeout(() => {
+                    setScreenPowerMode(false);
+                }, 250);
+            }
         }
 
         function injectKeyCode(keyCode, action) {
@@ -358,46 +330,37 @@
             document.getElementById('settingsPanel').classList.toggle('visible');
         }
 
-        function preloadSettingsFromScreenSize() {
-            document.getElementById('settingMaxWidth').value = latestScreenWidth;
-            document.getElementById('settingMaxHeight').value = latestScreenHeight;
-        }
-
-        function getNormalizedDimension(value, fallback) {
-            if (Number.isNaN(value) || value < 16) return fallback;
-            return value & ~15;
-        }
-
-        function applyStreamSettings() {
-            if (!input) return;
-            const bitrate = parseInt(document.getElementById('settingBitrate').value, 10);
-            const maxFps = parseInt(document.getElementById('settingMaxFps').value, 10);
-            const iFrameInterval = parseInt(document.getElementById('settingIFrameInterval').value, 10);
-            const maxWidth = getNormalizedDimension(parseInt(document.getElementById('settingMaxWidth').value, 10), latestScreenWidth & ~15);
-            const maxHeight = getNormalizedDimension(parseInt(document.getElementById('settingMaxHeight').value, 10), latestScreenHeight & ~15);
-
-            if (Number.isNaN(bitrate) || Number.isNaN(maxFps) || Number.isNaN(iFrameInterval)) {
-                document.getElementById('settingsStatus').textContent = 'Invalid settings values.';
-                return;
-            }
-
-            const data = input.createChangeStreamParametersProtocolData({
-                bitrate,
-                maxFps,
-                iFrameInterval,
-                maxWidth,
-                maxHeight,
-            });
-            socket.emit('control_data', { device_udid: deviceUdid, data });
-            document.getElementById('settingsStatus').textContent = `Applied: ${bitrate}bps, ${maxFps}fps, I=${iFrameInterval}s, ${maxWidth}x${maxHeight}`;
-        }
-
         function setScreenPowerMode(screenPowerOn) {
             if (!input) return;
             input.set_screen_power_mode(screenPowerOn);
+            pendingDefaultScreenOff = false;
             document.getElementById('settingsStatus').textContent = screenPowerOn
                 ? 'Requested screen power mode: ON'
                 : 'Requested screen power mode: OFF (stream should remain active)';
+        }
+
+        function sendClipboardToDevice() {
+            if (!input) return;
+            const text = document.getElementById('deviceTextInput').value || '';
+            const data = input.createSetClipboardControlMessage(text, false);
+            socket.emit('control_data', { device_udid: deviceUdid, data });
+            document.getElementById('settingsStatus').textContent = 'Clipboard text sent to device.';
+        }
+
+        function requestClipboardFromDevice() {
+            if (!input) return;
+            const data = input.createGetClipboardControlMessage();
+            socket.emit('control_data', { device_udid: deviceUdid, data });
+            document.getElementById('settingsStatus').textContent = 'Requested clipboard from device...';
+        }
+
+        function sendTextAsKeys() {
+            if (!input) return;
+            const text = document.getElementById('deviceTextInput').value || '';
+            if (!text) return;
+            const data = input.createTextControlMessage(text);
+            socket.emit('control_data', { device_udid: deviceUdid, data });
+            document.getElementById('settingsStatus').textContent = 'Text sent as key input.';
         }
 
         const socket = io({
@@ -428,8 +391,26 @@
             console.error('Socket error:', error);
         });
 
+        socket.on('device_message', async (payload) => {
+            if (!payload || payload.device_udid !== deviceUdid) return;
+            const message = payload.message || {};
+            if (message.type === 'clipboard') {
+                const text = message.text || '';
+                document.getElementById('deviceTextInput').value = text;
+                document.getElementById('settingsStatus').textContent = 'Clipboard received from device.';
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    try {
+                        await navigator.clipboard.writeText(text);
+                    } catch (e) {
+                        console.debug('Clipboard write failed:', e);
+                    }
+                }
+            }
+        });
+
         socket.on('disconnect', () => {
             document.getElementById('indicator').classList.add('loading');
+            pendingDefaultScreenOff = true;
             console.log('Disconnected from server');
         });
 

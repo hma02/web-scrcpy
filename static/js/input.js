@@ -420,56 +420,36 @@ class ScrcpyInput {
         return buffer;
     }
 
-    createChangeStreamParametersProtocolData({
-        bitrate,
-        maxFps,
-        iFrameInterval,
-        maxWidth,
-        maxHeight,
-    }) {
-        const type = 101; // TYPE_CHANGE_STREAM_PARAMETERS
-        const payloadLength = 35;
-        const buffer = new ArrayBuffer(1 + payloadLength);
+    createTextControlMessage(text) {
+        const type = 1; // TYPE_TEXT
+        const encoder = new TextEncoder();
+        const textBytes = encoder.encode(text || '');
+        const buffer = new ArrayBuffer(1 + 4 + textBytes.length);
         const view = new DataView(buffer);
+        view.setUint8(0, type);
+        view.setInt32(1, textBytes.length, false);
+        new Uint8Array(buffer, 5).set(textBytes);
+        return buffer;
+    }
 
-        let offset = 0;
-        view.setUint8(offset, type);
-        offset += 1;
+    createGetClipboardControlMessage() {
+        const type = 8; // TYPE_GET_CLIPBOARD
+        const buffer = new ArrayBuffer(1);
+        const view = new DataView(buffer);
+        view.setUint8(0, type);
+        return buffer;
+    }
 
-        view.setInt32(offset, bitrate, false);
-        offset += 4;
-        view.setInt32(offset, maxFps, false);
-        offset += 4;
-        view.setInt8(offset, iFrameInterval);
-        offset += 1;
-        view.setInt16(offset, maxWidth, false);
-        offset += 2;
-        view.setInt16(offset, maxHeight, false);
-        offset += 2;
-
-        // crop: left, top, right, bottom
-        view.setInt16(offset, 0, false);
-        offset += 2;
-        view.setInt16(offset, 0, false);
-        offset += 2;
-        view.setInt16(offset, 0, false);
-        offset += 2;
-        view.setInt16(offset, 0, false);
-        offset += 2;
-
-        // sendFrameMeta (false), locked orientation (-1), displayId (0)
-        view.setInt8(offset, 0);
-        offset += 1;
-        view.setInt8(offset, -1);
-        offset += 1;
-        view.setInt32(offset, 0, false);
-        offset += 4;
-
-        // codecOptions length, encoderName length
-        view.setInt32(offset, 0, false);
-        offset += 4;
-        view.setInt32(offset, 0, false);
-
+    createSetClipboardControlMessage(text, paste = false) {
+        const type = 9; // TYPE_SET_CLIPBOARD
+        const encoder = new TextEncoder();
+        const textBytes = encoder.encode(text || '');
+        const buffer = new ArrayBuffer(1 + 1 + 4 + textBytes.length);
+        const view = new DataView(buffer);
+        view.setUint8(0, type);
+        view.setUint8(1, paste ? 1 : 0);
+        view.setInt32(2, textBytes.length, false);
+        new Uint8Array(buffer, 6).set(textBytes);
         return buffer;
     }
 

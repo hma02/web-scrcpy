@@ -74,6 +74,15 @@ def send_video_data(device_udid, data):
             except queue.Full:
                 pass  # Skip if queue is full
 
+def send_device_message(device_udid, message):
+    """Send control channel device messages (e.g. clipboard) to all viewers of a device."""
+    for client_sid, queues_by_device in client_queues.items():
+        if device_udid in queues_by_device:
+            socketio.emit('device_message', {
+                'device_udid': device_udid,
+                'message': message
+            }, to=client_sid)
+
 @socketio.on('connect')
 def handle_connect():
     client_sid = request.sid
@@ -130,6 +139,7 @@ def handle_start_device(data):
                 lambda data: send_video_data(device_udid, data),
                 video_bit_rate,
                 max_fps,
+                lambda message: send_device_message(device_udid, message),
                 device_udid=device_udid
             )
             device_contexts[device_udid] = scpy_ctx
