@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit, send
 from scrcpy import Scrcpy
+from stream_lifecycle import detach_client_from_device
 import argparse
 import queue
 # Force inclusion of simple_websocket for threading async_mode in bundled binary
@@ -88,24 +89,14 @@ def handle_disconnect(reason=None):
     
     # Remove client from all device queues
     if client_sid in client_queues:
-        for device_udid, q in client_queues[client_sid].items():
-            if device_udid in device_video_queues:
-                try:
-                    device_video_queues[device_udid].remove(q)
-                except ValueError:
-                    pass
-                
-                # If no more clients watching this device, stop it
-                if len(device_video_queues[device_udid]) == 0:
-                    if device_udid in device_contexts:
-                        try:
-                            device_contexts[device_udid].scrcpy_stop()
-                        except Exception as e:
-                            print(f'scrcpy_stop failed for {device_udid}: {e}')
-                        del device_contexts[device_udid]
-                    if device_udid in device_video_queues:
-                        del device_video_queues[device_udid]
-        
+        for device_udid in list(client_queues[client_sid].keys()):
+            detach_client_from_device(
+                client_sid,
+                device_udid,
+                client_queues,
+                device_video_queues,
+                device_contexts
+            )
         del client_queues[client_sid]
     print('Client cleanup done')
 
@@ -167,25 +158,13 @@ def handle_stop_device(data):
     
     print(f"Client {client_sid} stopping device {device_udid}")
     
-    if client_sid in client_queues and device_udid in client_queues[client_sid]:
-        del client_queues[client_sid][device_udid]
-    
-    # If no more clients watching this device, stop it
-    if device_udid in device_video_queues:
-        if device_udid in client_queues[client_sid]:
-            try:
-                device_video_queues[device_udid].remove(client_queues[client_sid][device_udid])
-            except (ValueError, KeyError):
-                pass
-        
-        if len(device_video_queues[device_udid]) == 0:
-            if device_udid in device_contexts:
-                try:
-                    device_contexts[device_udid].scrcpy_stop()
-                except Exception as e:
-                    print(f'scrcpy_stop failed for {device_udid}: {e}')
-                del device_contexts[device_udid]
-            del device_video_queues[device_udid]
+    detach_client_from_device(
+        client_sid,
+        device_udid,
+        client_queues,
+        device_video_queues,
+        device_contexts
+    )
 
 @socketio.on('control_data')
 def handle_control_data(data):
