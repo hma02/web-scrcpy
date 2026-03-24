@@ -306,6 +306,7 @@
         let lastVideoDataAt = Date.now();
         let stallPromptShown = false;
         let awaitingClipboard = false;
+        let autoResumeInProgress = false;
 
         const parser = new VideoParser(({ type, data }) => {
             if (type === 'nalu') {
@@ -478,6 +479,19 @@
             }, 300);
         }
 
+        function reconnectStreamAuto(reason) {
+            if (autoResumeInProgress) return;
+            autoResumeInProgress = true;
+            console.log(`Attempting auto-resume reconnect (${reason})...`);
+            socket.emit('stop_device', { device_udid: deviceUdid });
+            setTimeout(() => {
+                socket.emit('start_device', { device_udid: deviceUdid });
+                setTimeout(() => {
+                    autoResumeInProgress = false;
+                }, 2000);
+            }, 300);
+        }
+
         function dismissStalledOverlay() {
             document.getElementById('stalledOverlay').classList.remove('visible');
             stallPromptShown = false;
@@ -495,6 +509,21 @@
                 awaitingClipboard = false;
             }
         }, 5000);
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible') {
+                return;
+            }
+            const lastSeen = lastVideoDataAt;
+            setTimeout(() => {
+                if (!socket.connected || !deviceUdid) return;
+                const staleMs = Date.now() - lastVideoDataAt;
+                const noNewFramesAfterVisible = lastVideoDataAt === lastSeen;
+                if (noNewFramesAfterVisible && staleMs > 5000) {
+                    reconnectStreamAuto('tab-visible-no-frames');
+                }
+            }, 2500);
+        });
 
         function goBack() {
             if (confirm('Stop streaming and go back?')) {

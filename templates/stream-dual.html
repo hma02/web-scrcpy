@@ -452,6 +452,7 @@
         const screenPowerOn = { 1: false, 2: false };
         const lastVideoDataAt = { 1: Date.now(), 2: Date.now() };
         const stallPromptShown = { 1: false, 2: false };
+        const autoResumeInProgress = { 1: false, 2: false };
 
         // Initialize muxer and parser for each device
         Object.keys(devices).forEach(deviceNum => {
@@ -653,6 +654,16 @@
             }, 300);
         }
 
+        function reconnectDeviceAuto(deviceNum, reason) {
+            if (autoResumeInProgress[deviceNum]) return;
+            autoResumeInProgress[deviceNum] = true;
+            console.log(`Attempting auto-resume reconnect for device ${deviceNum} (${reason})...`);
+            reconnectDevice(deviceNum);
+            setTimeout(() => {
+                autoResumeInProgress[deviceNum] = false;
+            }, 2500);
+        }
+
         setInterval(() => {
             const stalledThresholdMs = 45000;
             if (!socket.connected) return;
@@ -668,6 +679,22 @@
                 }
             });
         }, 5000);
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible' || !socket.connected) {
+                return;
+            }
+            const snapshots = { 1: lastVideoDataAt[1], 2: lastVideoDataAt[2] };
+            setTimeout(() => {
+                [1, 2].forEach((deviceNum) => {
+                    const staleMs = Date.now() - lastVideoDataAt[deviceNum];
+                    const noNewFramesAfterVisible = lastVideoDataAt[deviceNum] === snapshots[deviceNum];
+                    if (noNewFramesAfterVisible && staleMs > 5000) {
+                        reconnectDeviceAuto(deviceNum, 'tab-visible-no-frames');
+                    }
+                });
+            }, 2500);
+        });
 
         function goBack() {
             if (confirm('Stop streaming both devices and go back?')) {
