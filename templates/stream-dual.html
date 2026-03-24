@@ -177,6 +177,23 @@
             margin-bottom: 4px;
         }
 
+        .mini-settings {
+            margin-top: 6px;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 4px;
+        }
+
+        .mini-settings input {
+            width: 100%;
+            background: #262626;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 4px;
+            font-size: 11px;
+        }
+
         .mini-control-button {
             width: 100%;
             padding: 6px;
@@ -354,6 +371,17 @@
                     <button class="mini-control-button" title="Menu" onclick="sendControl(1, 'menu')">☰ Menu</button>
                     <button class="mini-control-button" title="Volume Down" onclick="sendControl(1, 'vol-down')">🔽 Vol-</button>
                     <button class="mini-control-button" title="Volume Up" onclick="sendControl(1, 'vol-up')">🔼 Vol+</button>
+                    <div class="mini-control-group">Stream Settings 1</div>
+                    <div class="mini-settings">
+                        <input id="bitrate1" type="number" value="512000" min="100000" step="100000" title="Bitrate (bps)">
+                        <input id="maxfps1" type="number" value="10" min="1" max="120" step="1" title="Max FPS">
+                        <input id="iframe1" type="number" value="10" min="1" max="120" step="1" title="I-frame interval (s)">
+                        <input id="maxw1" type="number" value="1080" min="16" step="16" title="Max width (px)">
+                        <input id="maxh1" type="number" value="1920" min="16" step="16" title="Max height (px)">
+                    </div>
+                    <button class="mini-control-button" onclick="applyStreamSettings(1)">Apply stream settings</button>
+                    <button class="mini-control-button" onclick="setScreenPowerMode(1, false)">Screen OFF keep stream</button>
+                    <button class="mini-control-button" onclick="setScreenPowerMode(1, true)">Screen ON</button>
                 </div>
             </div>
 
@@ -371,6 +399,17 @@
                     <button class="mini-control-button" title="Menu" onclick="sendControl(2, 'menu')">☰ Menu</button>
                     <button class="mini-control-button" title="Volume Down" onclick="sendControl(2, 'vol-down')">🔽 Vol-</button>
                     <button class="mini-control-button" title="Volume Up" onclick="sendControl(2, 'vol-up')">🔼 Vol+</button>
+                    <div class="mini-control-group">Stream Settings 2</div>
+                    <div class="mini-settings">
+                        <input id="bitrate2" type="number" value="512000" min="100000" step="100000" title="Bitrate (bps)">
+                        <input id="maxfps2" type="number" value="10" min="1" max="120" step="1" title="Max FPS">
+                        <input id="iframe2" type="number" value="10" min="1" max="120" step="1" title="I-frame interval (s)">
+                        <input id="maxw2" type="number" value="1080" min="16" step="16" title="Max width (px)">
+                        <input id="maxh2" type="number" value="1920" min="16" step="16" title="Max height (px)">
+                    </div>
+                    <button class="mini-control-button" onclick="applyStreamSettings(2)">Apply stream settings</button>
+                    <button class="mini-control-button" onclick="setScreenPowerMode(2, false)">Screen OFF keep stream</button>
+                    <button class="mini-control-button" onclick="setScreenPowerMode(2, true)">Screen ON</button>
                 </div>
             </div>
         </div>
@@ -421,6 +460,7 @@
         const muxers = {};
         const parsers = {};
         const inputs = {};
+        const latestSizes = {};
 
         // Initialize muxer and parser for each device
         Object.keys(devices).forEach(deviceNum => {
@@ -456,11 +496,14 @@
                     muxers[deviceNum].feed({ video: data["sps"] });
                     muxers[deviceNum].feed({ video: data["pps"] });
                 } else if (type === 'screen_size') {
+                    latestSizes[deviceNum] = { width: data["width"], height: data["height"] };
                     initInput(deviceNum, data["width"], data["height"]);
+                    preloadSettingsFromScreenSize(deviceNum);
                 } else if (type === 'size_change') {
                     if (inputs[deviceNum]) {
                         inputs[deviceNum].resizeScreen(data["width"], data["height"]);
                     }
+                    latestSizes[deviceNum] = { width: data["width"], height: data["height"] };
                 }
             });
         });
@@ -506,6 +549,46 @@
             if (keyCodeMap[action]) {
                 keyCodeMap[action]();
             }
+        }
+
+        function preloadSettingsFromScreenSize(deviceNum) {
+            const size = latestSizes[deviceNum];
+            if (!size) return;
+            document.getElementById(`maxw${deviceNum}`).value = size.width;
+            document.getElementById(`maxh${deviceNum}`).value = size.height;
+        }
+
+        function getNormalizedDimension(value, fallback) {
+            if (Number.isNaN(value) || value < 16) return fallback;
+            return value & ~15;
+        }
+
+        function applyStreamSettings(deviceNum) {
+            const input = inputs[deviceNum];
+            if (!input) return;
+            const size = latestSizes[deviceNum] || { width: 1080, height: 1920 };
+            const bitrate = parseInt(document.getElementById(`bitrate${deviceNum}`).value, 10);
+            const maxFps = parseInt(document.getElementById(`maxfps${deviceNum}`).value, 10);
+            const iFrameInterval = parseInt(document.getElementById(`iframe${deviceNum}`).value, 10);
+            const maxWidth = getNormalizedDimension(parseInt(document.getElementById(`maxw${deviceNum}`).value, 10), size.width & ~15);
+            const maxHeight = getNormalizedDimension(parseInt(document.getElementById(`maxh${deviceNum}`).value, 10), size.height & ~15);
+            if (Number.isNaN(bitrate) || Number.isNaN(maxFps) || Number.isNaN(iFrameInterval)) {
+                return;
+            }
+            const data = input.createChangeStreamParametersProtocolData({
+                bitrate,
+                maxFps,
+                iFrameInterval,
+                maxWidth,
+                maxHeight,
+            });
+            socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
+        }
+
+        function setScreenPowerMode(deviceNum, screenPowerOn) {
+            const input = inputs[deviceNum];
+            if (!input) return;
+            input.set_screen_power_mode(screenPowerOn);
         }
 
         const socket = io({

@@ -408,6 +408,71 @@ class ScrcpyInput {
         return buffer;
     }
 
+    createSetScreenPowerModeProtocolData(screenPowerOn) {
+        const type = 10; // TYPE_SET_SCREEN_POWER_MODE
+
+        const buffer = new ArrayBuffer(1 + 1);
+        const view = new DataView(buffer);
+        let offset = 0;
+        view.setUint8(offset, type);
+        offset += 1;
+        view.setUint8(offset, screenPowerOn ? 1 : 0);
+        return buffer;
+    }
+
+    createChangeStreamParametersProtocolData({
+        bitrate,
+        maxFps,
+        iFrameInterval,
+        maxWidth,
+        maxHeight,
+    }) {
+        const type = 101; // TYPE_CHANGE_STREAM_PARAMETERS
+        const payloadLength = 35;
+        const buffer = new ArrayBuffer(1 + payloadLength);
+        const view = new DataView(buffer);
+
+        let offset = 0;
+        view.setUint8(offset, type);
+        offset += 1;
+
+        view.setInt32(offset, bitrate, false);
+        offset += 4;
+        view.setInt32(offset, maxFps, false);
+        offset += 4;
+        view.setInt8(offset, iFrameInterval);
+        offset += 1;
+        view.setInt16(offset, maxWidth, false);
+        offset += 2;
+        view.setInt16(offset, maxHeight, false);
+        offset += 2;
+
+        // crop: left, top, right, bottom
+        view.setInt16(offset, 0, false);
+        offset += 2;
+        view.setInt16(offset, 0, false);
+        offset += 2;
+        view.setInt16(offset, 0, false);
+        offset += 2;
+        view.setInt16(offset, 0, false);
+        offset += 2;
+
+        // sendFrameMeta (false), locked orientation (-1), displayId (0)
+        view.setInt8(offset, 0);
+        offset += 1;
+        view.setInt8(offset, -1);
+        offset += 1;
+        view.setInt32(offset, 0, false);
+        offset += 4;
+
+        // codecOptions length, encoderName length
+        view.setInt32(offset, 0, false);
+        offset += 4;
+        view.setInt32(offset, 0, false);
+
+        return buffer;
+    }
+
     add_debug_item(text) {
         const p = document.createElement('p');
         p.textContent = text;
@@ -422,5 +487,10 @@ class ScrcpyInput {
         let data = null;
         data = this.createScreenProtocolData(action);
         this.callback(data)
+    }
+
+    set_screen_power_mode(screenPowerOn) {
+        const data = this.createSetScreenPowerModeProtocolData(screenPowerOn);
+        this.callback(data);
     }
 }

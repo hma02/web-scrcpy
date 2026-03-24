@@ -59,6 +59,7 @@
         .header-right {
             display: flex;
             gap: 15px;
+            align-items: center;
         }
 
         .btn-header {
@@ -74,6 +75,62 @@
 
         .btn-header:hover {
             background-color: #555;
+        }
+
+        .settings-panel {
+            position: absolute;
+            right: 12px;
+            top: 58px;
+            width: min(360px, calc(100vw - 24px));
+            background: rgba(20, 20, 20, 0.96);
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 12px;
+            z-index: 20;
+            display: none;
+        }
+
+        .settings-panel.visible {
+            display: block;
+        }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .settings-grid label {
+            font-size: 12px;
+            color: #ddd;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .settings-grid input {
+            background: #2c2c2c;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 6px;
+            font-size: 12px;
+            width: 100%;
+        }
+
+        .settings-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .status-text {
+            margin-top: 8px;
+            color: #aaa;
+            font-size: 12px;
+            min-height: 16px;
         }
 
         .video-container {
@@ -138,11 +195,38 @@
             <span id="deviceName">Device: Loading...</span>
         </div>
         <div class="header-right">
+            <button class="btn-header" onclick="toggleSettings()">⚙ Stream Settings</button>
             <button class="btn-header" onclick="goBack()">← Back</button>
         </div>
     </div>
 
     <div class="video-container">
+        <div class="settings-panel" id="settingsPanel">
+            <strong style="color:#fff;font-size:13px;">Live stream settings</strong>
+            <div class="settings-grid">
+                <label>Bitrate (bps)
+                    <input id="settingBitrate" type="number" min="100000" step="100000" value="512000">
+                </label>
+                <label>Max FPS
+                    <input id="settingMaxFps" type="number" min="1" max="120" step="1" value="10">
+                </label>
+                <label>I-frame interval (s)
+                    <input id="settingIFrameInterval" type="number" min="1" max="120" step="1" value="10">
+                </label>
+                <label>Max width (px)
+                    <input id="settingMaxWidth" type="number" min="16" step="16" value="1080">
+                </label>
+                <label>Max height (px)
+                    <input id="settingMaxHeight" type="number" min="16" step="16" value="1920">
+                </label>
+            </div>
+            <div class="settings-actions">
+                <button class="btn-header" onclick="applyStreamSettings()">Apply</button>
+                <button class="btn-header" onclick="setScreenPowerMode(false)">Screen OFF (keep stream)</button>
+                <button class="btn-header" onclick="setScreenPowerMode(true)">Screen ON</button>
+            </div>
+            <div id="settingsStatus" class="status-text"></div>
+        </div>
         <video id="player" autoplay muted webkit-playsinline playsinline x5-playsinline></video>
     </div>
 
@@ -204,6 +288,8 @@
         });
 
         let input = null;
+        let latestScreenWidth = 1080;
+        let latestScreenHeight = 1920;
 
         const parser = new VideoParser(({ type, data }) => {
             if (type === 'nalu') {
@@ -212,11 +298,16 @@
                 muxer.feed({ video: data["sps"] });
                 muxer.feed({ video: data["pps"] });
             } else if (type === 'screen_size') {
+                latestScreenWidth = data["width"];
+                latestScreenHeight = data["height"];
                 initInput(data["width"], data["height"]);
+                preloadSettingsFromScreenSize();
             } else if (type === 'size_change') {
                 if (input) {
                     input.resizeScreen(data["width"], data["height"]);
                 }
+                latestScreenWidth = data["width"];
+                latestScreenHeight = data["height"];
             }
         });
 
@@ -261,6 +352,52 @@
             if (keyCodeMap[action]) {
                 keyCodeMap[action]();
             }
+        }
+
+        function toggleSettings() {
+            document.getElementById('settingsPanel').classList.toggle('visible');
+        }
+
+        function preloadSettingsFromScreenSize() {
+            document.getElementById('settingMaxWidth').value = latestScreenWidth;
+            document.getElementById('settingMaxHeight').value = latestScreenHeight;
+        }
+
+        function getNormalizedDimension(value, fallback) {
+            if (Number.isNaN(value) || value < 16) return fallback;
+            return value & ~15;
+        }
+
+        function applyStreamSettings() {
+            if (!input) return;
+            const bitrate = parseInt(document.getElementById('settingBitrate').value, 10);
+            const maxFps = parseInt(document.getElementById('settingMaxFps').value, 10);
+            const iFrameInterval = parseInt(document.getElementById('settingIFrameInterval').value, 10);
+            const maxWidth = getNormalizedDimension(parseInt(document.getElementById('settingMaxWidth').value, 10), latestScreenWidth & ~15);
+            const maxHeight = getNormalizedDimension(parseInt(document.getElementById('settingMaxHeight').value, 10), latestScreenHeight & ~15);
+
+            if (Number.isNaN(bitrate) || Number.isNaN(maxFps) || Number.isNaN(iFrameInterval)) {
+                document.getElementById('settingsStatus').textContent = 'Invalid settings values.';
+                return;
+            }
+
+            const data = input.createChangeStreamParametersProtocolData({
+                bitrate,
+                maxFps,
+                iFrameInterval,
+                maxWidth,
+                maxHeight,
+            });
+            socket.emit('control_data', { device_udid: deviceUdid, data });
+            document.getElementById('settingsStatus').textContent = `Applied: ${bitrate}bps, ${maxFps}fps, I=${iFrameInterval}s, ${maxWidth}x${maxHeight}`;
+        }
+
+        function setScreenPowerMode(screenPowerOn) {
+            if (!input) return;
+            input.set_screen_power_mode(screenPowerOn);
+            document.getElementById('settingsStatus').textContent = screenPowerOn
+                ? 'Requested screen power mode: ON'
+                : 'Requested screen power mode: OFF (stream should remain active)';
         }
 
         const socket = io({
