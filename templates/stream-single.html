@@ -120,6 +120,35 @@
             min-height: 16px;
         }
 
+        .stalled-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 40;
+        }
+
+        .stalled-overlay.visible {
+            display: flex;
+        }
+
+        .stalled-box {
+            background: #1e1e1e;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 16px;
+            color: #fff;
+            width: min(420px, calc(100vw - 32px));
+        }
+
+        .stalled-actions {
+            margin-top: 12px;
+            display: flex;
+            gap: 8px;
+        }
+
         .video-container {
             flex: 1;
             position: relative;
@@ -192,13 +221,24 @@
             <strong style="color:#fff;font-size:13px;">Device controls</strong>
             <textarea id="deviceTextInput" placeholder="Type text for clipboard or 'send as keys'"></textarea>
             <div class="settings-actions">
-                <button class="btn-header" onclick="setScreenPowerMode(false)">Screen OFF (keep stream)</button>
-                <button class="btn-header" onclick="setScreenPowerMode(true)">Screen ON</button>
+                <button class="btn-header" id="screenPowerToggleBtn" onclick="toggleScreenPowerMode()">Screen OFF (keep stream)</button>
                 <button class="btn-header" onclick="sendClipboardToDevice()">Set clipboard</button>
                 <button class="btn-header" onclick="requestClipboardFromDevice()">Get clipboard</button>
                 <button class="btn-header" onclick="sendTextAsKeys()">Send as keys</button>
             </div>
             <div id="settingsStatus" class="status-text"></div>
+        </div>
+        <div id="stalledOverlay" class="stalled-overlay">
+            <div class="stalled-box">
+                <strong>Stream appears stalled</strong>
+                <p style="margin-top:8px;font-size:13px;color:#ddd;">
+                    No video frames have been received for a while. Reconnect this device stream?
+                </p>
+                <div class="stalled-actions">
+                    <button class="btn-header" onclick="reconnectStream()">Reconnect</button>
+                    <button class="btn-header" onclick="dismissStalledOverlay()">Keep waiting</button>
+                </div>
+            </div>
         </div>
         <video id="player" autoplay muted webkit-playsinline playsinline x5-playsinline></video>
     </div>
@@ -262,6 +302,10 @@
 
         let input = null;
         let pendingDefaultScreenOff = true;
+        let screenPowerOn = false;
+        let lastVideoDataAt = Date.now();
+        let stallPromptShown = false;
+        let awaitingClipboard = false;
 
         const parser = new VideoParser(({ type, data }) => {
             if (type === 'nalu') {
@@ -330,13 +374,19 @@
             document.getElementById('settingsPanel').classList.toggle('visible');
         }
 
-        function setScreenPowerMode(screenPowerOn) {
+        function setScreenPowerMode(isOn) {
             if (!input) return;
-            input.set_screen_power_mode(screenPowerOn);
+            input.set_screen_power_mode(isOn);
             pendingDefaultScreenOff = false;
+            screenPowerOn = isOn;
+            document.getElementById('screenPowerToggleBtn').textContent = screenPowerOn ? 'Screen ON' : 'Screen OFF (keep stream)';
             document.getElementById('settingsStatus').textContent = screenPowerOn
                 ? 'Requested screen power mode: ON'
                 : 'Requested screen power mode: OFF (stream should remain active)';
+        }
+
+        function toggleScreenPowerMode() {
+            setScreenPowerMode(!screenPowerOn);
         }
 
         function sendClipboardToDevice() {
@@ -351,6 +401,7 @@
             if (!input) return;
             const data = input.createGetClipboardControlMessage();
             socket.emit('control_data', { device_udid: deviceUdid, data });
+            awaitingClipboard = true;
             document.getElementById('settingsStatus').textContent = 'Requested clipboard from device...';
         }
 
@@ -372,6 +423,9 @@
             if (data.device_udid === deviceUdid) {
                 const newData = new Uint8Array(data.data);
                 parser.appendData(newData);
+                lastVideoDataAt = Date.now();
+                stallPromptShown = false;
+                document.getElementById('stalledOverlay').classList.remove('visible');
             }
         });
 
@@ -397,7 +451,8 @@
             if (message.type === 'clipboard') {
                 const text = message.text || '';
                 document.getElementById('deviceTextInput').value = text;
-                document.getElementById('settingsStatus').textContent = 'Clipboard received from device.';
+                awaitingClipboard = false;
+                document.getElementById('settingsStatus').textContent = `Clipboard received: ${text}`;
                 if (navigator.clipboard && navigator.clipboard.writeText) {
                     try {
                         await navigator.clipboard.writeText(text);
@@ -411,8 +466,35 @@
         socket.on('disconnect', () => {
             document.getElementById('indicator').classList.add('loading');
             pendingDefaultScreenOff = true;
+            stallPromptShown = false;
             console.log('Disconnected from server');
         });
+
+        function reconnectStream() {
+            dismissStalledOverlay();
+            socket.emit('stop_device', { device_udid: deviceUdid });
+            setTimeout(() => {
+                socket.emit('start_device', { device_udid: deviceUdid });
+            }, 300);
+        }
+
+        function dismissStalledOverlay() {
+            document.getElementById('stalledOverlay').classList.remove('visible');
+            stallPromptShown = false;
+            lastVideoDataAt = Date.now();
+        }
+
+        setInterval(() => {
+            const stalledThresholdMs = 45000;
+            if (!socket.connected || !deviceUdid) return;
+            if (Date.now() - lastVideoDataAt > stalledThresholdMs && !stallPromptShown) {
+                document.getElementById('stalledOverlay').classList.add('visible');
+                stallPromptShown = true;
+            }
+            if (awaitingClipboard && Date.now() - lastVideoDataAt > 120000) {
+                awaitingClipboard = false;
+            }
+        }, 5000);
 
         function goBack() {
             if (confirm('Stop streaming and go back?')) {

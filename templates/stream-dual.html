@@ -369,8 +369,7 @@
                     <div class="mini-settings">
                         <textarea id="text1" placeholder="clipboard / text input"></textarea>
                     </div>
-                    <button class="mini-control-button" onclick="setScreenPowerMode(1, false)">Screen OFF keep stream</button>
-                    <button class="mini-control-button" onclick="setScreenPowerMode(1, true)">Screen ON</button>
+                    <button class="mini-control-button" id="screenToggle1" onclick="toggleScreenPowerMode(1)">Screen OFF keep stream</button>
                     <button class="mini-control-button" onclick="setClipboard(1)">Set clipboard</button>
                     <button class="mini-control-button" onclick="getClipboard(1)">Get clipboard</button>
                     <button class="mini-control-button" onclick="sendTextAsKeys(1)">Send as keys</button>
@@ -395,8 +394,7 @@
                     <div class="mini-settings">
                         <textarea id="text2" placeholder="clipboard / text input"></textarea>
                     </div>
-                    <button class="mini-control-button" onclick="setScreenPowerMode(2, false)">Screen OFF keep stream</button>
-                    <button class="mini-control-button" onclick="setScreenPowerMode(2, true)">Screen ON</button>
+                    <button class="mini-control-button" id="screenToggle2" onclick="toggleScreenPowerMode(2)">Screen OFF keep stream</button>
                     <button class="mini-control-button" onclick="setClipboard(2)">Set clipboard</button>
                     <button class="mini-control-button" onclick="getClipboard(2)">Get clipboard</button>
                     <button class="mini-control-button" onclick="sendTextAsKeys(2)">Send as keys</button>
@@ -451,6 +449,9 @@
         const parsers = {};
         const inputs = {};
         const pendingDefaultScreenOff = { 1: true, 2: true };
+        const screenPowerOn = { 1: false, 2: false };
+        const lastVideoDataAt = { 1: Date.now(), 2: Date.now() };
+        const stallPromptShown = { 1: false, 2: false };
 
         // Initialize muxer and parser for each device
         Object.keys(devices).forEach(deviceNum => {
@@ -543,11 +544,18 @@
             }
         }
 
-        function setScreenPowerMode(deviceNum, screenPowerOn) {
+        function setScreenPowerMode(deviceNum, isOn) {
             const input = inputs[deviceNum];
             if (!input) return;
-            input.set_screen_power_mode(screenPowerOn);
+            input.set_screen_power_mode(isOn);
             pendingDefaultScreenOff[deviceNum] = false;
+            screenPowerOn[deviceNum] = isOn;
+            const label = isOn ? 'Screen ON' : 'Screen OFF keep stream';
+            document.getElementById(`screenToggle${deviceNum}`).textContent = label;
+        }
+
+        function toggleScreenPowerMode(deviceNum) {
+            setScreenPowerMode(deviceNum, !screenPowerOn[deviceNum]);
         }
 
         function setClipboard(deviceNum) {
@@ -584,6 +592,8 @@
             if (deviceNum && parsers[deviceNum]) {
                 const newData = new Uint8Array(data.data);
                 parsers[deviceNum].appendData(newData);
+                lastVideoDataAt[deviceNum] = Date.now();
+                stallPromptShown[deviceNum] = false;
             }
         });
 
@@ -630,8 +640,34 @@
             document.getElementById('indicator2').classList.add('loading');
             pendingDefaultScreenOff[1] = true;
             pendingDefaultScreenOff[2] = true;
+            stallPromptShown[1] = false;
+            stallPromptShown[2] = false;
             console.log('Disconnected from server');
         });
+
+        function reconnectDevice(deviceNum) {
+            const udid = devices[deviceNum].udid;
+            socket.emit('stop_device', { device_udid: udid });
+            setTimeout(() => {
+                socket.emit('start_device', { device_udid: udid });
+            }, 300);
+        }
+
+        setInterval(() => {
+            const stalledThresholdMs = 45000;
+            if (!socket.connected) return;
+            [1, 2].forEach((deviceNum) => {
+                if (Date.now() - lastVideoDataAt[deviceNum] > stalledThresholdMs && !stallPromptShown[deviceNum]) {
+                    stallPromptShown[deviceNum] = true;
+                    const shouldReconnect = confirm(`Device ${deviceNum} stream appears stalled. Reconnect now?`);
+                    if (shouldReconnect) {
+                        reconnectDevice(deviceNum);
+                    } else {
+                        lastVideoDataAt[deviceNum] = Date.now();
+                    }
+                }
+            });
+        }, 5000);
 
         function goBack() {
             if (confirm('Stop streaming both devices and go back?')) {

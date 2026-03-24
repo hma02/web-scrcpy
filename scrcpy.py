@@ -176,17 +176,6 @@ class Scrcpy:
 
     def handle_control_conn(self):
         print("Control connection established (idle)...")
-        try:
-            # Try to read protocol version byte (non-blocking attempt)
-            self.control_socket.settimeout(1.0)
-            try:
-                self.control_socket.recv(1)
-            except socket.timeout:
-                # No initial byte, that's okay - control socket might be send-only
-                pass
-            self.control_socket.settimeout(None)  # Reset to blocking
-        except Exception as e:
-            print(f"Error in control handshake: {e}")
         
         while not self.stop:
             try:
