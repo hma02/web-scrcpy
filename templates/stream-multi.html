@@ -25,11 +25,13 @@
             gap: 10px;
             transition: left 0.3s ease;
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
             position: fixed;
             left: calc(-1 * var(--sidebar-width));
             top: 0;
             width: var(--sidebar-width);
-            height: 100vh;
+            height: 100dvh;
             z-index: 1000;
         }
         .sidebar.expanded { left: 0; }
@@ -123,13 +125,13 @@
     <div class="main-content">
         <div class="video-container">
             <div class="stream-panel" id="panel1">
-                <div class="stream-content"><video id="player1" autoplay muted playsinline></video></div>
+                <div class="stream-content"><video id="player1" autoplay muted webkit-playsinline playsinline x5-playsinline></video></div>
             </div>
             <div class="stream-panel" id="panel2">
-                <div class="stream-content"><video id="player2" autoplay muted playsinline></video></div>
+                <div class="stream-content"><video id="player2" autoplay muted webkit-playsinline playsinline x5-playsinline></video></div>
             </div>
             <div class="stream-panel" id="panel3">
-                <div class="stream-content"><video id="player3" autoplay muted playsinline></video></div>
+                <div class="stream-content"><video id="player3" autoplay muted webkit-playsinline playsinline x5-playsinline></video></div>
             </div>
         </div>
         <div id="debugStatusMulti" class="debug-status"></div>
@@ -177,6 +179,18 @@
         const muxers = {}, parsers = {}, inputs = {};
         const screenPowerOn = { 1: false, 2: false, 3: false };
         const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
+        const autoplayRetryCount = { 1: 0, 2: 0, 3: 0 };
+
+        function requestVideoAutoplay(deviceNum) {
+            const videoElement = document.getElementById(devices[deviceNum].videoEl);
+            if (!videoElement) return;
+            const playPromise = videoElement.play();
+            if (playPromise && typeof playPromise.catch === 'function') {
+                playPromise.catch((err) => {
+                    console.debug(`Autoplay blocked for device ${deviceNum}:`, err);
+                });
+            }
+        }
 
         function initInput(deviceNum, width, height) {
             function input_data_cb(data) {
@@ -303,6 +317,11 @@
             const deviceNum = udidToDeviceNum(payload.device_udid);
             if (!deviceNum || !parsers[deviceNum]) return;
             parsers[deviceNum].appendData(new Uint8Array(payload.data));
+            requestVideoAutoplay(deviceNum);
+            if (autoplayRetryCount[deviceNum] < 10) {
+                autoplayRetryCount[deviceNum] += 1;
+                setTimeout(() => requestVideoAutoplay(deviceNum), 500);
+            }
             lastVideoDataAt[deviceNum] = Date.now();
         });
 
@@ -341,6 +360,12 @@
 
         setInterval(updateDebugStatus, 500);
         updateDebugStatus();
+
+        ['touchstart', 'click'].forEach((evtName) => {
+            document.addEventListener(evtName, () => {
+                deviceNums.forEach((n) => requestVideoAutoplay(n));
+            }, { passive: true });
+        });
     </script>
 </body>
 </html>

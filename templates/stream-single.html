@@ -82,12 +82,15 @@
             right: 12px;
             top: 58px;
             width: min(360px, calc(100vw - 24px));
+            max-height: calc(100vh - 80px);
             background: rgba(20, 20, 20, 0.96);
             border: 1px solid #555;
             border-radius: 8px;
             padding: 12px;
             z-index: 20;
             display: none;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
         }
 
         .settings-panel.visible {
@@ -325,6 +328,32 @@
         let streamState = 'stopped-streaming';
         let reconnectPromptTimer = null;
         let reconnectPromptDeadline = null;
+        let playRetryTimer = null;
+
+        function requestVideoAutoplay() {
+            const videoElement = document.getElementById('player');
+            if (!videoElement) return;
+            const playPromise = videoElement.play();
+            if (playPromise && typeof playPromise.catch === 'function') {
+                playPromise.catch((err) => {
+                    console.debug('Autoplay blocked or delayed:', err);
+                });
+            }
+        }
+
+        function scheduleAutoplayRetries() {
+            if (playRetryTimer) return;
+            let attempts = 0;
+            playRetryTimer = setInterval(() => {
+                attempts += 1;
+                requestVideoAutoplay();
+                const videoElement = document.getElementById('player');
+                if (!videoElement || !videoElement.paused || attempts >= 10) {
+                    clearInterval(playRetryTimer);
+                    playRetryTimer = null;
+                }
+            }, 500);
+        }
 
         const parser = new VideoParser(({ type, data }) => {
             if (type === 'nalu') {
@@ -494,6 +523,8 @@
             if (data.device_udid === deviceUdid) {
                 const newData = new Uint8Array(data.data);
                 parser.appendData(newData);
+                requestVideoAutoplay();
+                scheduleAutoplayRetries();
                 lastVideoDataAt = Date.now();
                 stallPromptShown = false;
                 streamState = 'streaming';
@@ -640,6 +671,10 @@
 
         setInterval(updateDebugStatus, 500);
         updateDebugStatus();
+
+        ['touchstart', 'click'].forEach((evtName) => {
+            document.addEventListener(evtName, requestVideoAutoplay, { passive: true });
+        });
 
         function goBack() {
             if (confirm('Stop streaming and go back?')) {
