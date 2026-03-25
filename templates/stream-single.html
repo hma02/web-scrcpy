@@ -319,6 +319,8 @@
         let awaitingClipboard = false;
         let autoResumeInProgress = false;
         let streamState = 'stopped-streaming';
+        let reconnectPromptTimer = null;
+        let reconnectPromptDeadline = null;
 
         const parser = new VideoParser(({ type, data }) => {
             if (type === 'nalu') {
@@ -510,18 +512,37 @@
         }
 
         function dismissStalledOverlay() {
+            if (reconnectPromptTimer) {
+                clearTimeout(reconnectPromptTimer);
+                reconnectPromptTimer = null;
+            }
+            reconnectPromptDeadline = null;
             document.getElementById('stalledOverlay').classList.remove('visible');
             stallPromptShown = false;
             lastVideoDataAt = Date.now();
         }
 
+        function showStalledOverlayWithAutoReconnect() {
+            const popupTimeoutMs = 5000;
+            document.getElementById('stalledOverlay').classList.add('visible');
+            stallPromptShown = true;
+            streamState = 'stopped-streaming';
+            reconnectPromptDeadline = Date.now() + popupTimeoutMs;
+            if (reconnectPromptTimer) {
+                clearTimeout(reconnectPromptTimer);
+            }
+            reconnectPromptTimer = setTimeout(() => {
+                reconnectPromptTimer = null;
+                reconnectPromptDeadline = null;
+                reconnectStream();
+            }, popupTimeoutMs);
+        }
+
         setInterval(() => {
-            const stalledThresholdMs = 45000;
+            const stalledThresholdMs = 5000;
             if (!socket.connected || !deviceUdid) return;
             if (Date.now() - lastVideoDataAt > stalledThresholdMs && !stallPromptShown) {
-                document.getElementById('stalledOverlay').classList.add('visible');
-                stallPromptShown = true;
-                streamState = 'stopped-streaming';
+                showStalledOverlayWithAutoReconnect();
             }
             if (awaitingClipboard && Date.now() - lastVideoDataAt > 120000) {
                 awaitingClipboard = false;
@@ -553,6 +574,7 @@
                 `socket=${connected}`,
                 `last_frame_age_s=${secondsSinceFrame}`,
                 `stall_prompt=${stallPromptShown ? 'on' : 'off'}`,
+                `popup_eta_s=${reconnectPromptDeadline ? Math.max(0, ((reconnectPromptDeadline - Date.now()) / 1000)).toFixed(1) : '-'}`,
                 `auto_resume=${autoResumeInProgress ? 'running' : 'idle'}`,
                 `screen_power=${screenPowerOn ? 'on' : 'off'}`,
                 `awaiting_clipboard=${awaitingClipboard ? 'yes' : 'no'}`

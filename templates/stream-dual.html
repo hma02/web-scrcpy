@@ -299,6 +299,35 @@
             white-space: pre-wrap;
         }
 
+        .stalled-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 3000;
+        }
+
+        .stalled-overlay.visible {
+            display: flex;
+        }
+
+        .stalled-box {
+            background: #1e1e1e;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 16px;
+            color: #fff;
+            width: min(420px, calc(100vw - 32px));
+        }
+
+        .stalled-actions {
+            margin-top: 12px;
+            display: flex;
+            gap: 8px;
+        }
+
         @media (max-width: 1024px) {
             body {
                 display: flex;
@@ -431,6 +460,16 @@
         </div>
         <div id="debugStatusDual" class="debug-status"></div>
     </div>
+    <div id="dualReconnectPopup" class="stalled-overlay">
+        <div class="stalled-box">
+            <strong id="dualPopupTitle">Stream appears stalled</strong>
+            <p id="dualPopupText" style="margin-top:8px;font-size:13px;color:#ddd;"></p>
+            <div class="stalled-actions">
+                <button class="btn-header" onclick="dualPopupReconnectNow()">Reconnect now</button>
+                <button class="btn-header" onclick="dualPopupKeepWaiting()">Keep waiting</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         function toggleSidebar() {
@@ -465,6 +504,9 @@
         const stallPromptShown = { 1: false, 2: false };
         const autoResumeInProgress = { 1: false, 2: false };
         const streamState = { 1: 'stopped-streaming', 2: 'stopped-streaming' };
+        const promptDeadline = { 1: null, 2: null };
+        const promptTimer = { 1: null, 2: null };
+        let dualPopupDeviceNum = null;
 
         // Initialize muxer and parser for each device
         Object.keys(devices).forEach(deviceNum => {
@@ -658,6 +700,8 @@
             pendingDefaultScreenOff[2] = true;
             stallPromptShown[1] = false;
             stallPromptShown[2] = false;
+            dismissDualPopup(1);
+            dismissDualPopup(2);
             streamState[1] = 'stopped-streaming';
             streamState[2] = 'stopped-streaming';
             console.log('Disconnected from server');
@@ -682,19 +726,53 @@
             }, 2500);
         }
 
+        function dismissDualPopup(deviceNum) {
+            if (promptTimer[deviceNum]) {
+                clearTimeout(promptTimer[deviceNum]);
+                promptTimer[deviceNum] = null;
+            }
+            promptDeadline[deviceNum] = null;
+            dualPopupDeviceNum = null;
+            document.getElementById('dualReconnectPopup').classList.remove('visible');
+        }
+
+        function showDualReconnectPopup(deviceNum) {
+            const popupTimeoutMs = 5000;
+            stallPromptShown[deviceNum] = true;
+            streamState[deviceNum] = 'stopped-streaming';
+            dualPopupDeviceNum = deviceNum;
+            promptDeadline[deviceNum] = Date.now() + popupTimeoutMs;
+            document.getElementById('dualPopupTitle').textContent = `Device ${deviceNum} stream appears stalled`;
+            document.getElementById('dualReconnectPopup').classList.add('visible');
+            if (promptTimer[deviceNum]) {
+                clearTimeout(promptTimer[deviceNum]);
+            }
+            promptTimer[deviceNum] = setTimeout(() => {
+                reconnectDevice(deviceNum);
+                dismissDualPopup(deviceNum);
+            }, popupTimeoutMs);
+        }
+
+        function dualPopupReconnectNow() {
+            if (!dualPopupDeviceNum) return;
+            reconnectDevice(dualPopupDeviceNum);
+            dismissDualPopup(dualPopupDeviceNum);
+        }
+
+        function dualPopupKeepWaiting() {
+            if (!dualPopupDeviceNum) return;
+            const deviceNum = dualPopupDeviceNum;
+            lastVideoDataAt[deviceNum] = Date.now();
+            stallPromptShown[deviceNum] = false;
+            dismissDualPopup(deviceNum);
+        }
+
         setInterval(() => {
-            const stalledThresholdMs = 45000;
+            const stalledThresholdMs = 5000;
             if (!socket.connected) return;
             [1, 2].forEach((deviceNum) => {
                 if (Date.now() - lastVideoDataAt[deviceNum] > stalledThresholdMs && !stallPromptShown[deviceNum]) {
-                    stallPromptShown[deviceNum] = true;
-                    const shouldReconnect = confirm(`Device ${deviceNum} stream appears stalled. Reconnect now?`);
-                    if (shouldReconnect) {
-                        reconnectDevice(deviceNum);
-                    } else {
-                        lastVideoDataAt[deviceNum] = Date.now();
-                    }
-                    streamState[deviceNum] = 'stopped-streaming';
+                    showDualReconnectPopup(deviceNum);
                 }
             });
         }, 5000);
@@ -720,10 +798,18 @@
             const socketState = socket.connected ? 'connected' : 'disconnected';
             const age1 = ((Date.now() - lastVideoDataAt[1]) / 1000).toFixed(1);
             const age2 = ((Date.now() - lastVideoDataAt[2]) / 1000).toFixed(1);
+            const eta1 = promptDeadline[1] ? Math.max(0, ((promptDeadline[1] - Date.now()) / 1000)).toFixed(1) : '-';
+            const eta2 = promptDeadline[2] ? Math.max(0, ((promptDeadline[2] - Date.now()) / 1000)).toFixed(1) : '-';
             const line1 = `attention=${attention} | socket=${socketState}`;
-            const line2 = `d1 stream=${streamState[1]} frame_age_s=${age1} stall_prompt=${stallPromptShown[1] ? 'on' : 'off'} auto_resume=${autoResumeInProgress[1] ? 'running' : 'idle'} screen_power=${screenPowerOn[1] ? 'on' : 'off'}`;
-            const line3 = `d2 stream=${streamState[2]} frame_age_s=${age2} stall_prompt=${stallPromptShown[2] ? 'on' : 'off'} auto_resume=${autoResumeInProgress[2] ? 'running' : 'idle'} screen_power=${screenPowerOn[2] ? 'on' : 'off'}`;
+            const line2 = `d1 stream=${streamState[1]} frame_age_s=${age1} stall_prompt=${stallPromptShown[1] ? 'on' : 'off'} popup_eta_s=${eta1} auto_resume=${autoResumeInProgress[1] ? 'running' : 'idle'} screen_power=${screenPowerOn[1] ? 'on' : 'off'}`;
+            const line3 = `d2 stream=${streamState[2]} frame_age_s=${age2} stall_prompt=${stallPromptShown[2] ? 'on' : 'off'} popup_eta_s=${eta2} auto_resume=${autoResumeInProgress[2] ? 'running' : 'idle'} screen_power=${screenPowerOn[2] ? 'on' : 'off'}`;
             document.getElementById('debugStatusDual').textContent = `${line1}\n${line2}\n${line3}`;
+            if (dualPopupDeviceNum) {
+                const remaining = promptDeadline[dualPopupDeviceNum]
+                    ? Math.max(0, ((promptDeadline[dualPopupDeviceNum] - Date.now()) / 1000)).toFixed(1)
+                    : '0.0';
+                document.getElementById('dualPopupText').textContent = `Auto reconnecting device ${dualPopupDeviceNum} in ${remaining}s unless you choose otherwise.`;
+            }
         }
 
         setInterval(updateDebugStatus, 500);
