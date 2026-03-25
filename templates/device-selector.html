@@ -172,6 +172,26 @@
             font-size: 14px;
         }
 
+        .pin-history {
+            max-height: 160px;
+            overflow: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .pin-history table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .pin-history th, .pin-history td {
+            padding: 8px;
+            border-bottom: 1px solid #f0f0f0;
+            text-align: left;
+        }
+
         .btn {
             padding: 12px 24px;
             border: none;
@@ -249,6 +269,19 @@
                 </button>
             </div>
 
+            <div class="pin-history">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>PIN</th>
+                            <th>Saved at</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pinHistoryBody"></tbody>
+                </table>
+            </div>
+
             <div class="buttons">
                 <button class="btn btn-secondary" onclick="scanDevices()">
                     <i class="fa-solid fa-rotate"></i> Refresh
@@ -311,8 +344,45 @@
                 const response = await fetch('/api/pin');
                 const data = await response.json();
                 document.getElementById('pinInput').value = data.pin || '';
+                renderPinHistory(data.history || []);
             } catch (error) {
                 console.error('Load PIN error:', error);
+            }
+        }
+
+        function renderPinHistory(historyRows) {
+            const tbody = document.getElementById('pinHistoryBody');
+            tbody.innerHTML = '';
+            if (!historyRows.length) {
+                tbody.innerHTML = '<tr><td colspan=\"3\" style=\"color:#999;\">No saved PIN history yet.</td></tr>';
+                return;
+            }
+            historyRows.forEach((row) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${row.masked_pin}</td>
+                    <td>${row.saved_at}</td>
+                    <td><button class=\"btn btn-secondary\" style=\"padding:4px 8px;font-size:11px;\" onclick=\"usePinHistory(${row.id})\">Use</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function usePinHistory(historyId) {
+            try {
+                const response = await fetch('/api/pin/select', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: historyId })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to use PIN history');
+                }
+                document.getElementById('pinInput').value = data.pin || '';
+                showStatus('Loaded PIN from history.', 'info');
+            } catch (error) {
+                showStatus(`Error loading PIN history: ${error.message}`, 'error');
             }
         }
 
@@ -329,6 +399,7 @@
                     throw new Error('Failed to save PIN');
                 }
                 showStatus('PIN saved in server memory (lost when server restarts).', 'info');
+                await loadPin();
             } catch (error) {
                 showStatus(`Error saving PIN: ${error.message}`, 'error');
             }

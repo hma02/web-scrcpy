@@ -72,22 +72,14 @@
         .stream-content { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
         video { max-width: 100%; max-height: 100%; width: auto; height: auto; background: black; }
 
-        .panel-selector {
-            position: absolute; top: 10px; left: 10px; z-index: 20; background: rgba(0,0,0,0.6);
-            border: 1px solid #666; border-radius: 5px; color: #fff; padding: 4px 6px; font-size: 12px;
-        }
-
         .debug-status {
             padding: 8px 10px; background: #111; border-top: 1px solid #333; color: #9ad;
             font-size: 12px; font-family: monospace; white-space: pre-wrap;
         }
 
-        .portrait-selectors { display: none; }
         @media (orientation: portrait) {
             .video-container { flex-direction: column; }
             .stream-panel { width: 100%; aspect-ratio: 9 / 16; flex: 0 0 auto; }
-            .panel-selector { display: none; }
-            .portrait-selectors { display: block; }
         }
     </style>
     <script src="/static/js/socket.io.js"></script>
@@ -103,7 +95,7 @@
     <div class="sidebar" id="sidebar">
         <button class="control-btn" onclick="goBack()">← Back to Menu</button>
 
-        <div class="selector-box portrait-selectors" id="portraitSelectors">
+        <div class="selector-box" id="targetSelectors">
             <strong>Target devices</strong>
             <label><input type="checkbox" id="selectSidebar1" checked> <span id="targetLabel1">Device 1</span></label>
             <label><input type="checkbox" id="selectSidebar2" checked> <span id="targetLabel2">Device 2</span></label>
@@ -116,6 +108,8 @@
             <button class="control-btn" onclick="sendControlToSelected('back')">← Back</button>
             <button class="control-btn" onclick="sendControlToSelected('home')">⌂ Home</button>
             <button class="control-btn" onclick="sendControlToSelected('menu')">☰ Menu</button>
+            <button class="control-btn" onclick="sendControlToSelected('vol-down')">🔉 Vol-</button>
+            <button class="control-btn" onclick="sendControlToSelected('vol-up')">🔊 Vol+</button>
             <button class="control-btn" onclick="sendControlToSelected('confirm')">✅ Confirm (OK)</button>
             <button class="control-btn" onclick="toggleScreenPowerForSelected()">Toggle Screen ON/OFF</button>
             <textarea id="bulkText" class="bulk-text" placeholder="clipboard / text input"></textarea>
@@ -129,15 +123,12 @@
     <div class="main-content">
         <div class="video-container">
             <div class="stream-panel" id="panel1">
-                <div class="panel-selector"><label><input type="checkbox" id="selectLandscape1" checked> D1</label></div>
                 <div class="stream-content"><video id="player1" autoplay muted playsinline></video></div>
             </div>
             <div class="stream-panel" id="panel2">
-                <div class="panel-selector"><label><input type="checkbox" id="selectLandscape2" checked> D2</label></div>
                 <div class="stream-content"><video id="player2" autoplay muted playsinline></video></div>
             </div>
             <div class="stream-panel" id="panel3">
-                <div class="panel-selector"><label><input type="checkbox" id="selectLandscape3" checked> D3</label></div>
                 <div class="stream-content"><video id="player3" autoplay muted playsinline></video></div>
             </div>
         </div>
@@ -172,19 +163,11 @@
             document.getElementById(`targetLabel${n}`).textContent = `Device ${n}: ${deviceUdids[idx]}`;
         });
 
-        function setSelectedState(deviceNum, checked) {
-            selectedState[deviceNum] = checked;
-            const land = document.getElementById(`selectLandscape${deviceNum}`);
-            const side = document.getElementById(`selectSidebar${deviceNum}`);
-            if (land) land.checked = checked;
-            if (side) side.checked = checked;
-        }
-
         deviceNums.forEach((n) => {
-            const land = document.getElementById(`selectLandscape${n}`);
             const side = document.getElementById(`selectSidebar${n}`);
-            land?.addEventListener('change', (e) => setSelectedState(n, e.target.checked));
-            side?.addEventListener('change', (e) => setSelectedState(n, e.target.checked));
+            side?.addEventListener('change', (e) => {
+                selectedState[n] = e.target.checked;
+            });
         });
 
         function getSelectedDeviceNums() {
@@ -227,6 +210,8 @@
             const keyCodeMap = {
                 'power': () => { emitKey(26, 0); setTimeout(() => emitKey(26, 1), 100); },
                 'confirm': () => { emitKey(66, 0); setTimeout(() => emitKey(66, 1), 100); },
+                'vol-down': () => { emitKey(25, 0); setTimeout(() => emitKey(25, 1), 100); },
+                'vol-up': () => { emitKey(24, 0); setTimeout(() => emitKey(24, 1), 100); },
                 'back': () => { emitKey(4, 0); setTimeout(() => emitKey(4, 1), 100); },
                 'home': () => { emitKey(3, 0); setTimeout(() => emitKey(3, 1), 100); },
                 'menu': () => { emitKey(187, 0); setTimeout(() => emitKey(187, 1), 100); }

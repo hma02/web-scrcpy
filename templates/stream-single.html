@@ -267,6 +267,12 @@
         <button class="control-icon" title="Menu" onclick="sendControl('menu')">
             <i class="fa-solid fa-bars"></i>
         </button>
+        <button class="control-icon" title="Volume Down" onclick="sendControl('vol-down')">
+            <i class="fa-solid fa-volume-down"></i>
+        </button>
+        <button class="control-icon" title="Volume Up" onclick="sendControl('vol-up')">
+            <i class="fa-solid fa-volume-up"></i>
+        </button>
         <button class="control-icon" title="Confirm (OK)" onclick="sendControl('confirm')">
             <i class="fa-solid fa-check"></i>
         </button>
@@ -373,6 +379,8 @@
                 // Use KEYCODE_POWER (26). screen_on_off() can act like Back when display is already on.
                 'power': () => { injectKeyCode(26, 0); setTimeout(() => injectKeyCode(26, 1), 100); },
                 'confirm': () => { injectKeyCode(66, 0); setTimeout(() => injectKeyCode(66, 1), 100); },
+                'vol-down': () => { injectKeyCode(25, 0); setTimeout(() => injectKeyCode(25, 1), 100); },
+                'vol-up': () => { injectKeyCode(24, 0); setTimeout(() => injectKeyCode(24, 1), 100); },
                 'back': () => { injectKeyCode(4, 0); setTimeout(() => injectKeyCode(4, 1), 100); },
                 'home': () => { injectKeyCode(3, 0); setTimeout(() => injectKeyCode(3, 1), 100); },
                 'menu': () => { injectKeyCode(187, 0); setTimeout(() => injectKeyCode(187, 1), 100); }
