@@ -157,6 +157,21 @@
             justify-content: center;
         }
 
+        .pin-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+
+        .pin-input {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-size: 14px;
+        }
+
         .btn {
             padding: 12px 24px;
             border: none;
@@ -227,6 +242,13 @@
                 <!-- Devices will be populated here -->
             </div>
 
+            <div class="pin-row">
+                <input id="pinInput" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="Memorized PIN">
+                <button class="btn btn-secondary" onclick="savePin()">
+                    <i class="fa-solid fa-key"></i> Save PIN
+                </button>
+            </div>
+
             <div class="buttons">
                 <button class="btn btn-secondary" onclick="scanDevices()">
                     <i class="fa-solid fa-rotate"></i> Refresh
@@ -241,6 +263,7 @@
     <script>
         let availableDevices = [];
         let selectedDevices = [];
+        let pinSaveTimer = null;
 
         function showStatus(message, type) {
             const status = document.getElementById('status');
@@ -280,6 +303,34 @@
             } catch (error) {
                 showStatus(`Error scanning devices: ${error.message}`, 'error');
                 console.error('Scan error:', error);
+            }
+        }
+
+        async function loadPin() {
+            try {
+                const response = await fetch('/api/pin');
+                const data = await response.json();
+                document.getElementById('pinInput').value = data.pin || '';
+            } catch (error) {
+                console.error('Load PIN error:', error);
+            }
+        }
+
+        async function savePin() {
+            const pinValue = (document.getElementById('pinInput').value || '').replace(/\D/g, '');
+            document.getElementById('pinInput').value = pinValue;
+            try {
+                const response = await fetch('/api/pin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pin: pinValue })
+                });
+                if (!response.ok) {
+                    throw new Error('Failed to save PIN');
+                }
+                showStatus('PIN saved in server memory (lost when server restarts).', 'info');
+            } catch (error) {
+                showStatus(`Error saving PIN: ${error.message}`, 'error');
             }
         }
 
@@ -359,6 +410,14 @@
 
         // Auto-scan on page load
         scanDevices();
+        loadPin();
+
+        document.getElementById('pinInput').addEventListener('input', () => {
+            if (pinSaveTimer) {
+                clearTimeout(pinSaveTimer);
+            }
+            pinSaveTimer = setTimeout(savePin, 250);
+        });
 
         // Scan every 5 seconds
         setInterval(scanDevices, 5000);

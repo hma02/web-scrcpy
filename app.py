@@ -18,6 +18,7 @@ device_video_queues = {}
 
 video_bit_rate = "256000"
 max_fps = 10
+memorized_pin = ""
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
@@ -50,6 +51,21 @@ def get_devices():
     except Exception as e:
         print(f"Error getting devices: {e}")
         return jsonify([]), 500
+
+@app.route('/api/pin', methods=['GET', 'POST'])
+def pin_memory():
+    """In-memory PIN storage (lives only while server process is running)."""
+    global memorized_pin
+    if request.method == 'GET':
+        return jsonify({'pin': memorized_pin})
+
+    payload = request.get_json(silent=True) or {}
+    pin = payload.get('pin', '')
+    if not isinstance(pin, str):
+        return jsonify({'error': 'pin must be a string'}), 400
+    # PIN is expected as digits; keep only digits to avoid accidental extra chars.
+    memorized_pin = ''.join(ch for ch in pin if ch.isdigit())
+    return jsonify({'pin': memorized_pin})
 
 def video_send_task(client_sid, device_udid):
     """Send video data for a specific device to a specific client"""
