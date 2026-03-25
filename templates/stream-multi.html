@@ -16,6 +16,7 @@
             background-color: #1a1a1a;
             font-family: Arial, sans-serif;
         }
+        :root { --sidebar-width: 260px; }
         .sidebar {
             background-color: #222;
             border-right: 1px solid #444;
@@ -27,9 +28,9 @@
             transition: left 0.3s ease;
             overflow-y: auto;
             position: fixed;
-            left: -260px;
+            left: calc(-1 * var(--sidebar-width));
             top: 0;
-            width: 260px;
+            width: var(--sidebar-width);
             height: 100vh;
             z-index: 1000;
         }
@@ -81,6 +82,17 @@
             margin-bottom: 4px;
         }
         .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        @media (orientation: landscape) {
+            .main-content {
+                transition: margin-left 0.3s ease;
+            }
+            body.sidebar-open .main-content {
+                margin-left: var(--sidebar-width);
+            }
+            body.sidebar-open .sidebar-toggle {
+                left: calc(var(--sidebar-width) + 10px);
+            }
+        }
         .video-container {
             flex: 1;
             display: flex;
@@ -190,7 +202,11 @@
     </div>
 
     <script>
-        function toggleSidebar() { document.getElementById('sidebar').classList.toggle('expanded'); }
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('expanded');
+            document.body.classList.toggle('sidebar-open', sidebar.classList.contains('expanded'));
+        }
 
         const urlParams = new URLSearchParams(window.location.search);
         const deviceUdids = [urlParams.get('device1'), urlParams.get('device2'), urlParams.get('device3')].filter(Boolean);
