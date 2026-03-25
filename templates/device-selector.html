@@ -157,6 +157,41 @@
             justify-content: center;
         }
 
+        .pin-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+
+        .pin-input {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-size: 14px;
+        }
+
+        .pin-history {
+            max-height: 160px;
+            overflow: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .pin-history table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .pin-history th, .pin-history td {
+            padding: 8px;
+            border-bottom: 1px solid #f0f0f0;
+            text-align: left;
+        }
+
         .btn {
             padding: 12px 24px;
             border: none;
@@ -227,6 +262,26 @@
                 <!-- Devices will be populated here -->
             </div>
 
+            <div class="pin-row">
+                <input id="pinInput" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="Memorized PIN">
+                <button class="btn btn-secondary" onclick="savePin()">
+                    <i class="fa-solid fa-key"></i> Save PIN
+                </button>
+            </div>
+
+            <div class="pin-history">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>PIN</th>
+                            <th>Saved at</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pinHistoryBody"></tbody>
+                </table>
+            </div>
+
             <div class="buttons">
                 <button class="btn btn-secondary" onclick="scanDevices()">
                     <i class="fa-solid fa-rotate"></i> Refresh
@@ -241,6 +296,7 @@
     <script>
         let availableDevices = [];
         let selectedDevices = [];
+        let pinSaveTimer = null;
 
         function showStatus(message, type) {
             const status = document.getElementById('status');
@@ -273,13 +329,79 @@
                 if (availableDevices.length === 1) {
                     showStatus(`Found ${availableDevices.length} device. Select it to begin streaming.`, 'info');
                 } else {
-                    showStatus(`Found ${availableDevices.length} devices. Select one or more to stream (max 2 for dual-view).`, 'info');
+                    showStatus(`Found ${availableDevices.length} devices. Select up to 3 devices to stream (single/dual/multi-view).`, 'info');
                 }
 
                 renderDevices();
             } catch (error) {
                 showStatus(`Error scanning devices: ${error.message}`, 'error');
                 console.error('Scan error:', error);
+            }
+        }
+
+        async function loadPin() {
+            try {
+                const response = await fetch('/api/pin');
+                const data = await response.json();
+                document.getElementById('pinInput').value = data.pin || '';
+                renderPinHistory(data.history || []);
+            } catch (error) {
+                console.error('Load PIN error:', error);
+            }
+        }
+
+        function renderPinHistory(historyRows) {
+            const tbody = document.getElementById('pinHistoryBody');
+            tbody.innerHTML = '';
+            if (!historyRows.length) {
+                tbody.innerHTML = '<tr><td colspan=\"3\" style=\"color:#999;\">No saved PIN history yet.</td></tr>';
+                return;
+            }
+            historyRows.forEach((row) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${row.masked_pin}</td>
+                    <td>${row.saved_at}</td>
+                    <td><button class=\"btn btn-secondary\" style=\"padding:4px 8px;font-size:11px;\" onclick=\"usePinHistory(${row.id})\">Use</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function usePinHistory(historyId) {
+            try {
+                const response = await fetch('/api/pin/select', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: historyId })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to use PIN history');
+                }
+                document.getElementById('pinInput').value = data.pin || '';
+                showStatus('Loaded PIN from history.', 'info');
+            } catch (error) {
+                showStatus(`Error loading PIN history: ${error.message}`, 'error');
+            }
+        }
+
+        async function savePin() {
+            const pinValue = (document.getElementById('pinInput').value || '').replace(/\D/g, '');
+            document.getElementById('pinInput').value = pinValue;
+            try {
+                const response = await fetch('/api/pin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pin: pinValue })
+                });
+                if (!response.ok) {
+                    throw new Error('Failed to save PIN');
+                }
+                showStatus('PIN saved in server memory (lost when server restarts).', 'info');
+                await loadPin();
+            } catch (error) {
+                showStatus(`Error saving PIN: ${error.message}`, 'error');
             }
         }
 
@@ -316,11 +438,11 @@
                 selectedDevices = selectedDevices.filter(d => d !== udid);
                 cardElement.classList.remove('selected');
             } else {
-                if (selectedDevices.length < 2) {
+                if (selectedDevices.length < 3) {
                     selectedDevices.push(udid);
                     cardElement.classList.add('selected');
                 } else {
-                    alert('Maximum 2 devices can be selected for dual-view. Please deselect one device first.');
+                    alert('Maximum 3 devices can be selected. Please deselect one device first.');
                     return;
                 }
             }
@@ -335,6 +457,8 @@
                 connectBtn.innerHTML = '<i class="fa-solid fa-play"></i> Connect (Single)';
             } else if (selectedDevices.length === 2) {
                 connectBtn.innerHTML = '<i class="fa-solid fa-play"></i> Connect (Dual)';
+            } else if (selectedDevices.length === 3) {
+                connectBtn.innerHTML = '<i class="fa-solid fa-play"></i> Connect (Multi)';
             } else {
                 connectBtn.innerHTML = '<i class="fa-solid fa-play"></i> Connect';
             }
@@ -349,12 +473,22 @@
             if (selectedDevices.length === 1) {
                 window.location.href = `/stream-single?device=${encodeURIComponent(selectedDevices[0])}`;
             } else if (selectedDevices.length === 2) {
-                window.location.href = `/stream-dual?device1=${encodeURIComponent(selectedDevices[0])}&device2=${encodeURIComponent(selectedDevices[1])}`;
+                window.location.href = `/stream-multi?device1=${encodeURIComponent(selectedDevices[0])}&device2=${encodeURIComponent(selectedDevices[1])}`;
+            } else if (selectedDevices.length === 3) {
+                window.location.href = `/stream-multi?device1=${encodeURIComponent(selectedDevices[0])}&device2=${encodeURIComponent(selectedDevices[1])}&device3=${encodeURIComponent(selectedDevices[2])}`;
             }
         }
 
         // Auto-scan on page load
         scanDevices();
+        loadPin();
+
+        document.getElementById('pinInput').addEventListener('input', () => {
+            if (pinSaveTimer) {
+                clearTimeout(pinSaveTimer);
+            }
+            pinSaveTimer = setTimeout(savePin, 250);
+        });
 
         // Scan every 5 seconds
         setInterval(scanDevices, 5000);

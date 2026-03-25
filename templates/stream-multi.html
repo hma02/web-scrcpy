@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <title>Multi Device Stream - Web Scrcpy</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --sidebar-width: 280px; }
+        body {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: Arial, sans-serif;
+        }
+        .sidebar {
+            background-color: #222;
+            border-right: 1px solid #444;
+            display: flex;
+            flex-direction: column;
+            padding: 60px 10px 10px;
+            gap: 10px;
+            transition: left 0.3s ease;
+            overflow-y: auto;
+            position: fixed;
+            left: calc(-1 * var(--sidebar-width));
+            top: 0;
+            width: var(--sidebar-width);
+            height: 100vh;
+            z-index: 1000;
+        }
+        .sidebar.expanded { left: 0; }
+        .sidebar-toggle {
+            width: 40px;
+            height: 40px;
+            background-color: #333;
+            border: 1px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+            color: white;
+            position: fixed;
+            left: 10px;
+            top: 10px;
+            z-index: 1001;
+        }
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        @media (orientation: landscape) {
+            .main-content { transition: margin-left 0.3s ease; }
+            body.sidebar-open .main-content { margin-left: var(--sidebar-width); }
+            body.sidebar-open .sidebar-toggle { left: calc(var(--sidebar-width) + 10px); }
+        }
+
+        .control-btn {
+            width: 100%; padding: 8px; border: 1px solid #555; background-color: #333; color: white;
+            border-radius: 4px; cursor: pointer; margin-bottom: 6px; text-align: left;
+        }
+        .control-btn:hover { background-color: #444; }
+        .bulk-text {
+            width: 100%; min-height: 70px; background: #262626; color: #fff; border: 1px solid #555;
+            border-radius: 3px; padding: 6px; font-size: 12px;
+        }
+        .selector-box {
+            background: #2a2a2a; border: 1px solid #444; border-radius: 4px; padding: 8px; color: #ddd;
+        }
+        .selector-box label { display: block; margin: 4px 0; font-size: 12px; }
+
+        .video-container { flex: 1; display: flex; gap: 2px; overflow: auto; flex-direction: row; }
+        .stream-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: #000; border: 1px solid #333; }
+        .stream-content { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        video { max-width: 100%; max-height: 100%; width: auto; height: auto; background: black; }
+
+        .debug-status {
+            padding: 8px 10px; background: #111; border-top: 1px solid #333; color: #9ad;
+            font-size: 12px; font-family: monospace; white-space: pre-wrap;
+        }
+
+        @media (orientation: portrait) {
+            .video-container { flex-direction: column; }
+            .stream-panel { width: 100%; aspect-ratio: 9 / 16; flex: 0 0 auto; }
+        }
+    </style>
+    <script src="/static/js/socket.io.js"></script>
+    <script src="/static/js/input.js"></script>
+    <script src="/static/js/exp-golomb.js"></script>
+    <script src="/static/js/h264-sps-parser.js"></script>
+    <script src="/static/js/video_parser.js"></script>
+    <script src="/static/js/jmuxer.min.js"></script>
+</head>
+<body>
+    <button class="sidebar-toggle" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i></button>
+
+    <div class="sidebar" id="sidebar">
+        <button class="control-btn" onclick="goBack()">← Back to Menu</button>
+
+        <div class="selector-box" id="targetSelectors">
+            <strong>Target devices</strong>
+            <label><input type="checkbox" id="selectSidebar1" checked> <span id="targetLabel1">Device 1</span></label>
+            <label><input type="checkbox" id="selectSidebar2" checked> <span id="targetLabel2">Device 2</span></label>
+            <label id="sidebarTargetRow3"><input type="checkbox" id="selectSidebar3" checked> <span id="targetLabel3">Device 3</span></label>
+        </div>
+
+        <div class="selector-box">
+            <strong>Controls (apply to selected devices)</strong>
+            <button class="control-btn" onclick="sendControlToSelected('power')">⏻ Power</button>
+            <button class="control-btn" onclick="sendControlToSelected('back')">← Back</button>
+            <button class="control-btn" onclick="sendControlToSelected('home')">⌂ Home</button>
+            <button class="control-btn" onclick="sendControlToSelected('menu')">☰ Menu</button>
+            <button class="control-btn" onclick="sendControlToSelected('vol-down')">🔉 Vol-</button>
+            <button class="control-btn" onclick="sendControlToSelected('vol-up')">🔊 Vol+</button>
+            <button class="control-btn" onclick="sendControlToSelected('confirm')">✅ Confirm (OK)</button>
+            <button class="control-btn" onclick="toggleScreenPowerForSelected()">Toggle Screen ON/OFF</button>
+            <textarea id="bulkText" class="bulk-text" placeholder="clipboard / text input"></textarea>
+            <button class="control-btn" onclick="setClipboardForSelected()">Set clipboard</button>
+            <button class="control-btn" onclick="getClipboardForSelected()">Get clipboard</button>
+            <button class="control-btn" onclick="sendTextAsKeysForSelected()">Send as keys</button>
+            <button class="control-btn" onclick="swipeUpPinAndOkForSelected()">Swipe Up -> Send Pin -> Send OK</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="video-container">
+            <div class="stream-panel" id="panel1">
+                <div class="stream-content"><video id="player1" autoplay muted playsinline></video></div>
+            </div>
+            <div class="stream-panel" id="panel2">
+                <div class="stream-content"><video id="player2" autoplay muted playsinline></video></div>
+            </div>
+            <div class="stream-panel" id="panel3">
+                <div class="stream-content"><video id="player3" autoplay muted playsinline></video></div>
+            </div>
+        </div>
+        <div id="debugStatusMulti" class="debug-status"></div>
+    </div>
+
+    <script>
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('expanded');
+            document.body.classList.toggle('sidebar-open', sidebar.classList.contains('expanded'));
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const deviceUdids = [urlParams.get('device1'), urlParams.get('device2'), urlParams.get('device3')].filter(Boolean);
+        if (deviceUdids.length < 2 || deviceUdids.length > 3) {
+            alert('Provide 2 or 3 devices.');
+            window.location.href = '/';
+            throw new Error('Invalid device count');
+        }
+
+        if (!urlParams.get('device3')) {
+            document.getElementById('panel3').style.display = 'none';
+            document.getElementById('sidebarTargetRow3').style.display = 'none';
+        }
+
+        const deviceNums = [1, 2, 3].filter((n) => n <= deviceUdids.length);
+        const devices = {};
+        const selectedState = { 1: true, 2: true, 3: true };
+        deviceNums.forEach((n, idx) => {
+            devices[n] = { udid: deviceUdids[idx], videoEl: `player${n}` };
+            document.getElementById(`targetLabel${n}`).textContent = `Device ${n}: ${deviceUdids[idx]}`;
+        });
+
+        deviceNums.forEach((n) => {
+            const side = document.getElementById(`selectSidebar${n}`);
+            side?.addEventListener('change', (e) => {
+                selectedState[n] = e.target.checked;
+            });
+        });
+
+        function getSelectedDeviceNums() {
+            return deviceNums.filter((n) => selectedState[n]);
+        }
+
+        const muxers = {}, parsers = {}, inputs = {};
+        const screenPowerOn = { 1: false, 2: false, 3: false };
+        const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
+
+        function initInput(deviceNum, width, height) {
+            function input_data_cb(data) {
+                socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
+            }
+            const videoElement = document.getElementById(devices[deviceNum].videoEl);
+            inputs[deviceNum] = new ScrcpyInput(input_data_cb, videoElement, width, height, false);
+            setTimeout(() => {
+                if (inputs[deviceNum]) {
+                    inputs[deviceNum].set_screen_power_mode(false);
+                }
+            }, 250);
+        }
+
+        deviceNums.forEach((deviceNum) => {
+            const device = devices[deviceNum];
+            const videoElement = document.getElementById(device.videoEl);
+            muxers[deviceNum] = new JMuxer({ node: device.videoEl, mode: 'video', flushingTime: 0, fps: 60, clearBuffer: true, onReady: () => { if (videoElement) videoElement.controls = false; } });
+            parsers[deviceNum] = new VideoParser(({ type, data }) => {
+                if (type === 'nalu') muxers[deviceNum].feed({ video: data });
+                else if (type === 'init') { muxers[deviceNum].feed({ video: data['sps'] }); muxers[deviceNum].feed({ video: data['pps'] }); }
+                else if (type === 'screen_size') initInput(deviceNum, data['width'], data['height']);
+                else if (type === 'size_change' && inputs[deviceNum]) inputs[deviceNum].resizeScreen(data['width'], data['height']);
+            });
+        });
+
+        function sendControl(deviceNum, action) {
+            const input = inputs[deviceNum];
+            if (!input || !devices[deviceNum]) return;
+            const emitKey = (keyCode, actionNum) => socket.emit('control_data', { device_udid: devices[deviceNum].udid, data: input.createKeyProtocolData(actionNum, keyCode, 0, 0) });
+            const keyCodeMap = {
+                'power': () => { emitKey(26, 0); setTimeout(() => emitKey(26, 1), 100); },
+                'confirm': () => { emitKey(66, 0); setTimeout(() => emitKey(66, 1), 100); },
+                'vol-down': () => { emitKey(25, 0); setTimeout(() => emitKey(25, 1), 100); },
+                'vol-up': () => { emitKey(24, 0); setTimeout(() => emitKey(24, 1), 100); },
+                'back': () => { emitKey(4, 0); setTimeout(() => emitKey(4, 1), 100); },
+                'home': () => { emitKey(3, 0); setTimeout(() => emitKey(3, 1), 100); },
+                'menu': () => { emitKey(187, 0); setTimeout(() => emitKey(187, 1), 100); }
+            };
+            keyCodeMap[action]?.();
+        }
+
+        function sendControlToSelected(action) {
+            getSelectedDeviceNums().forEach((n) => sendControl(n, action));
+        }
+
+        function toggleScreenPowerForSelected() {
+            getSelectedDeviceNums().forEach((n) => {
+                if (!inputs[n]) return;
+                screenPowerOn[n] = !screenPowerOn[n];
+                inputs[n].set_screen_power_mode(screenPowerOn[n]);
+            });
+        }
+
+        function setClipboardForSelected() {
+            const text = document.getElementById('bulkText').value || '';
+            getSelectedDeviceNums().forEach((n) => {
+                if (!inputs[n]) return;
+                socket.emit('control_data', { device_udid: devices[n].udid, data: inputs[n].createSetClipboardControlMessage(text, false) });
+            });
+        }
+
+        function getClipboardForSelected() {
+            getSelectedDeviceNums().forEach((n) => {
+                if (!inputs[n]) return;
+                socket.emit('control_data', { device_udid: devices[n].udid, data: inputs[n].createGetClipboardControlMessage() });
+            });
+        }
+
+        function sendTextAsKeysForSelected() {
+            const text = document.getElementById('bulkText').value || '';
+            if (!text) return;
+            getSelectedDeviceNums().forEach((n) => {
+                if (!inputs[n]) return;
+                socket.emit('control_data', { device_udid: devices[n].udid, data: inputs[n].createTextControlMessage(text) });
+            });
+        }
+
+        function sendSwipeUpGesture(deviceNum) {
+            const input = inputs[deviceNum]; if (!input || !devices[deviceNum]) return;
+            const x = Math.floor(input.width * 0.5);
+            const yStart = Math.floor(input.height * 0.82);
+            const yEnd = Math.floor(input.height * 0.2);
+            const frames = 6;
+            const pressure = 65535;
+            const udid = devices[deviceNum].udid;
+
+            socket.emit('control_data', { device_udid: udid, data: input.createTouchProtocolData(0, x, yStart, input.width, input.height, 0, 0, pressure) });
+            for (let i = 1; i < frames; i++) {
+                const y = Math.floor(yStart - ((yStart - yEnd) * i / frames));
+                setTimeout(() => {
+                    socket.emit('control_data', { device_udid: udid, data: input.createTouchProtocolData(2, x, y, input.width, input.height, 0, 0, pressure) });
+                }, i * 20);
+            }
+            setTimeout(() => {
+                socket.emit('control_data', { device_udid: udid, data: input.createTouchProtocolData(1, x, yEnd, input.width, input.height, 0, 0, 0) });
+            }, frames * 20 + 20);
+        }
+
+        async function swipeUpPinAndOkForSelected() {
+            const targets = getSelectedDeviceNums();
+            if (targets.length === 0) return;
+            const response = await fetch('/api/pin');
+            const payload = await response.json();
+            const pin = payload.pin || '';
+            if (!pin) {
+                document.getElementById('bulkText').value = 'No memorized PIN. Set PIN on selection page.';
+                return;
+            }
+            targets.forEach((n) => {
+                if (!inputs[n]) return;
+                sendSwipeUpGesture(n);
+                setTimeout(() => {
+                    socket.emit('control_data', { device_udid: devices[n].udid, data: inputs[n].createTextControlMessage(pin) });
+                    setTimeout(() => sendControl(n, 'confirm'), 120);
+                }, 280);
+            });
+        }
+
+        const socket = io({ reconnection: true, autoConnect: true });
+        const udidToDeviceNum = (udid) => deviceNums.find((n) => devices[n].udid === udid) || null;
+
+        socket.on('video_data', (payload) => {
+            const deviceNum = udidToDeviceNum(payload.device_udid);
+            if (!deviceNum || !parsers[deviceNum]) return;
+            parsers[deviceNum].appendData(new Uint8Array(payload.data));
+            lastVideoDataAt[deviceNum] = Date.now();
+        });
+
+        socket.on('device_message', (payload) => {
+            if (!payload) return;
+            const message = payload.message || {};
+            if (message.type === 'clipboard') {
+                document.getElementById('bulkText').value = message.text || '';
+            }
+        });
+
+        socket.on('connect', () => {
+            deviceNums.forEach((n) => socket.emit('start_device', { device_udid: devices[n].udid }));
+        });
+
+        function updateDebugStatus() {
+            const socketState = socket.connected ? 'connected' : 'disconnected';
+            const selected = getSelectedDeviceNums().join(',') || 'none';
+            const lines = [`socket=${socketState} | selected=${selected} | layout=${window.innerWidth < window.innerHeight ? 'portrait' : 'landscape'}`];
+            deviceNums.forEach((n) => lines.push(`d${n} frame_age_s=${((Date.now() - lastVideoDataAt[n]) / 1000).toFixed(1)} screen_power=${screenPowerOn[n] ? 'on' : 'off'}`));
+            document.getElementById('debugStatusMulti').textContent = lines.join('\n');
+        }
+
+        function goBack() {
+            if (confirm('Stop streaming selected devices and go back?')) {
+                deviceNums.forEach((n) => socket.emit('stop_device', { device_udid: devices[n].udid }));
+                socket.disconnect();
+                window.location.href = '/';
+            }
+        }
+
+        window.addEventListener('beforeunload', () => {
+            deviceNums.forEach((n) => socket.emit('stop_device', { device_udid: devices[n].udid }));
+            socket.disconnect();
+        });
+
+        setInterval(updateDebugStatus, 500);
+        updateDebugStatus();
+    </script>
+</body>
+</html>
