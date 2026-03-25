@@ -157,7 +157,7 @@
                 <button class="mini-control-button" onclick="setClipboard(1)">Set clipboard</button>
                 <button class="mini-control-button" onclick="getClipboard(1)">Get clipboard</button>
                 <button class="mini-control-button" onclick="sendTextAsKeys(1)">Send as keys</button>
-                <button class="mini-control-button" onclick="inputPinWithOk(1)">Input Pin with OK</button>
+                <button class="mini-control-button" onclick="swipeUpPinAndOk(1)">Swipe Up -> Send Pin -> Send OK</button>
             </div>
 
             <div class="device-section">
@@ -172,7 +172,7 @@
                 <button class="mini-control-button" onclick="setClipboard(2)">Set clipboard</button>
                 <button class="mini-control-button" onclick="getClipboard(2)">Get clipboard</button>
                 <button class="mini-control-button" onclick="sendTextAsKeys(2)">Send as keys</button>
-                <button class="mini-control-button" onclick="inputPinWithOk(2)">Input Pin with OK</button>
+                <button class="mini-control-button" onclick="swipeUpPinAndOk(2)">Swipe Up -> Send Pin -> Send OK</button>
             </div>
 
             <div class="device-section">
@@ -187,7 +187,7 @@
                 <button class="mini-control-button" onclick="setClipboard(3)">Set clipboard</button>
                 <button class="mini-control-button" onclick="getClipboard(3)">Get clipboard</button>
                 <button class="mini-control-button" onclick="sendTextAsKeys(3)">Send as keys</button>
-                <button class="mini-control-button" onclick="inputPinWithOk(3)">Input Pin with OK</button>
+                <button class="mini-control-button" onclick="swipeUpPinAndOk(3)">Swipe Up -> Send Pin -> Send OK</button>
             </div>
         </div>
     </div>
@@ -312,7 +312,39 @@
             socket.emit('control_data', { device_udid: devices[deviceNum].udid, data: input.createTextControlMessage(text) });
         }
 
-        async function inputPinWithOk(deviceNum) {
+        function sendSwipeUpGesture(deviceNum) {
+            const input = inputs[deviceNum]; if (!input || !devices[deviceNum]) return;
+            const x = Math.floor(input.width * 0.5);
+            const yStart = Math.floor(input.height * 0.82);
+            const yEnd = Math.floor(input.height * 0.2);
+            const frames = 6;
+            const pressure = 65535;
+            const udid = devices[deviceNum].udid;
+
+            socket.emit('control_data', {
+                device_udid: udid,
+                data: input.createTouchProtocolData(0, x, yStart, input.width, input.height, 0, 0, pressure)
+            });
+
+            for (let i = 1; i < frames; i++) {
+                const y = Math.floor(yStart - ((yStart - yEnd) * i / frames));
+                setTimeout(() => {
+                    socket.emit('control_data', {
+                        device_udid: udid,
+                        data: input.createTouchProtocolData(2, x, y, input.width, input.height, 0, 0, pressure)
+                    });
+                }, i * 20);
+            }
+
+            setTimeout(() => {
+                socket.emit('control_data', {
+                    device_udid: udid,
+                    data: input.createTouchProtocolData(1, x, yEnd, input.width, input.height, 0, 0, 0)
+                });
+            }, frames * 20 + 20);
+        }
+
+        async function swipeUpPinAndOk(deviceNum) {
             const input = inputs[deviceNum]; if (!input || !devices[deviceNum]) return;
             try {
                 const response = await fetch('/api/pin');
@@ -322,10 +354,13 @@
                     document.getElementById(`text${deviceNum}`).value = 'No memorized PIN. Set PIN on selection page.';
                     return;
                 }
-                socket.emit('control_data', { device_udid: devices[deviceNum].udid, data: input.createTextControlMessage(pin) });
+                sendSwipeUpGesture(deviceNum);
                 setTimeout(() => {
-                    sendControl(deviceNum, 'confirm');
-                }, 120);
+                    socket.emit('control_data', { device_udid: devices[deviceNum].udid, data: input.createTextControlMessage(pin) });
+                    setTimeout(() => {
+                        sendControl(deviceNum, 'confirm');
+                    }, 120);
+                }, 280);
             } catch (error) {
                 document.getElementById(`text${deviceNum}`).value = `PIN load failed: ${error.message}`;
             }

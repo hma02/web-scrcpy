@@ -235,7 +235,7 @@
                 <button class="btn-header" onclick="sendClipboardToDevice()">Set clipboard</button>
                 <button class="btn-header" onclick="requestClipboardFromDevice()">Get clipboard</button>
                 <button class="btn-header" onclick="sendTextAsKeys()">Send as keys</button>
-                <button class="btn-header" onclick="inputPinWithOk()">Input Pin with OK</button>
+                <button class="btn-header" onclick="swipeUpPinAndOk()">Swipe Up -> Send Pin -> Send OK</button>
             </div>
             <div id="settingsStatus" class="status-text"></div>
         </div>
@@ -427,7 +427,32 @@
             document.getElementById('settingsStatus').textContent = 'Text sent as key input.';
         }
 
-        async function inputPinWithOk() {
+        function sendSwipeUpGesture() {
+            if (!input) return;
+            const x = Math.floor(input.width * 0.5);
+            const yStart = Math.floor(input.height * 0.82);
+            const yEnd = Math.floor(input.height * 0.2);
+            const frames = 6;
+            const pressure = 65535;
+
+            const down = input.createTouchProtocolData(0, x, yStart, input.width, input.height, 0, 0, pressure);
+            socket.emit('control_data', { device_udid: deviceUdid, data: down });
+
+            for (let i = 1; i < frames; i++) {
+                const y = Math.floor(yStart - ((yStart - yEnd) * i / frames));
+                setTimeout(() => {
+                    const move = input.createTouchProtocolData(2, x, y, input.width, input.height, 0, 0, pressure);
+                    socket.emit('control_data', { device_udid: deviceUdid, data: move });
+                }, i * 20);
+            }
+
+            setTimeout(() => {
+                const up = input.createTouchProtocolData(1, x, yEnd, input.width, input.height, 0, 0, 0);
+                socket.emit('control_data', { device_udid: deviceUdid, data: up });
+            }, frames * 20 + 20);
+        }
+
+        async function swipeUpPinAndOk() {
             if (!input) return;
             try {
                 const response = await fetch('/api/pin');
@@ -437,13 +462,16 @@
                     document.getElementById('settingsStatus').textContent = 'No memorized PIN found. Set it on the selection page first.';
                     return;
                 }
-                const data = input.createTextControlMessage(pin);
-                socket.emit('control_data', { device_udid: deviceUdid, data });
+                sendSwipeUpGesture();
                 setTimeout(() => {
-                    injectKeyCode(66, 0);
-                    setTimeout(() => injectKeyCode(66, 1), 80);
-                }, 120);
-                document.getElementById('settingsStatus').textContent = 'Memorized PIN + OK sent.';
+                    const data = input.createTextControlMessage(pin);
+                    socket.emit('control_data', { device_udid: deviceUdid, data });
+                    setTimeout(() => {
+                        injectKeyCode(66, 0);
+                        setTimeout(() => injectKeyCode(66, 1), 80);
+                    }, 120);
+                }, 280);
+                document.getElementById('settingsStatus').textContent = 'Swipe up + memorized PIN + OK sent.';
             } catch (error) {
                 document.getElementById('settingsStatus').textContent = `Failed to load PIN: ${error.message}`;
             }
