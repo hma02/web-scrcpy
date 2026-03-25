@@ -34,7 +34,11 @@ def stream_single():
 
 @app.route('/stream-dual')
 def stream_dual():
-    return render_template('stream-dual.html')
+    return render_template('stream-multi.html')
+
+@app.route('/stream-multi')
+def stream_multi():
+    return render_template('stream-multi.html')
 
 @app.route('/api/devices')
 def get_devices():

@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <title>Multi Device Stream - Web Scrcpy</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: Arial, sans-serif;
+        }
+        .sidebar {
+            background-color: #222;
+            border-right: 1px solid #444;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 60px 10px 10px;
+            gap: 10px;
+            transition: left 0.3s ease;
+            overflow-y: auto;
+            position: fixed;
+            left: -260px;
+            top: 0;
+            width: 260px;
+            height: 100vh;
+            z-index: 1000;
+        }
+        .sidebar.expanded { left: 0; }
+        .sidebar-toggle {
+            width: 40px;
+            height: 40px;
+            background-color: #333;
+            border: 1px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            position: fixed;
+            left: 10px;
+            top: 10px;
+            z-index: 1001;
+        }
+        .sidebar-content { width: 100%; display: flex; flex-direction: column; gap: 12px; }
+        .device-section { padding: 10px; background-color: #2a2a2a; border-radius: 4px; border: 1px solid #444; }
+        .device-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: white; font-size: 12px; }
+        .device-indicator { width: 10px; height: 10px; border-radius: 50%; background-color: #4caf50; }
+        .device-indicator.loading { background-color: #ff9800; }
+        .device-name { color: #aaa; word-break: break-all; font-size: 11px; }
+        .mini-control-button {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #555;
+            background-color: #333;
+            color: white;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            text-align: left;
+            margin-bottom: 4px;
+        }
+        .mini-settings textarea {
+            width: 100%;
+            background: #262626;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 4px;
+            font-size: 11px;
+            min-height: 56px;
+            margin-bottom: 4px;
+        }
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .video-container {
+            flex: 1;
+            display: flex;
+            flex-direction: row;
+            gap: 2px;
+            overflow: auto;
+        }
+        .stream-panel {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            background-color: #000;
+            border: 1px solid #333;
+        }
+        .stream-content {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: black;
+            overflow: hidden;
+        }
+        video { max-width: 100%; max-height: 100%; width: auto; height: auto; background: black; }
+        .debug-status {
+            padding: 8px 10px;
+            background: #111;
+            border-top: 1px solid #333;
+            color: #9ad;
+            font-size: 12px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        @media (orientation: portrait) {
+            .video-container { flex-direction: column; }
+            .stream-panel { width: 100%; aspect-ratio: 9 / 16; flex: 0 0 auto; }
+        }
+    </style>
+    <script src="/static/js/socket.io.js"></script>
+    <script src="/static/js/input.js"></script>
+    <script src="/static/js/exp-golomb.js"></script>
+    <script src="/static/js/h264-sps-parser.js"></script>
+    <script src="/static/js/video_parser.js"></script>
+    <script src="/static/js/jmuxer.min.js"></script>
+</head>
+
+<body>
+    <button class="sidebar-toggle" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i></button>
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-content">
+            <button class="mini-control-button" onclick="goBack()">← Back to Menu</button>
+
+            <div class="device-section">
+                <div class="device-header"><span class="device-indicator loading" id="indicator1"></span><span class="device-name" id="deviceName1">Device 1</span></div>
+                <button class="mini-control-button" onclick="sendControl(1, 'power')">⏻ Power</button>
+                <button class="mini-control-button" onclick="sendControl(1, 'back')">← Back</button>
+                <button class="mini-control-button" onclick="sendControl(1, 'home')">⌂ Home</button>
+                <button class="mini-control-button" onclick="sendControl(1, 'menu')">☰ Menu</button>
+                <button class="mini-control-button" onclick="sendControl(1, 'vol-down')">🔽 Vol-</button>
+                <button class="mini-control-button" onclick="sendControl(1, 'vol-up')">🔼 Vol+</button>
+                <div class="mini-settings"><textarea id="text1" placeholder="clipboard / text input"></textarea></div>
+                <button class="mini-control-button" id="screenToggle1" onclick="toggleScreenPowerMode(1)">Screen OFF keep stream</button>
+                <button class="mini-control-button" onclick="setClipboard(1)">Set clipboard</button>
+                <button class="mini-control-button" onclick="getClipboard(1)">Get clipboard</button>
+                <button class="mini-control-button" onclick="sendTextAsKeys(1)">Send as keys</button>
+            </div>
+
+            <div class="device-section">
+                <div class="device-header"><span class="device-indicator loading" id="indicator2"></span><span class="device-name" id="deviceName2">Device 2</span></div>
+                <button class="mini-control-button" onclick="sendControl(2, 'power')">⏻ Power</button>
+                <button class="mini-control-button" onclick="sendControl(2, 'back')">← Back</button>
+                <button class="mini-control-button" onclick="sendControl(2, 'home')">⌂ Home</button>
+                <button class="mini-control-button" onclick="sendControl(2, 'menu')">☰ Menu</button>
+                <button class="mini-control-button" onclick="sendControl(2, 'vol-down')">🔽 Vol-</button>
+                <button class="mini-control-button" onclick="sendControl(2, 'vol-up')">🔼 Vol+</button>
+                <div class="mini-settings"><textarea id="text2" placeholder="clipboard / text input"></textarea></div>
+                <button class="mini-control-button" id="screenToggle2" onclick="toggleScreenPowerMode(2)">Screen OFF keep stream</button>
+                <button class="mini-control-button" onclick="setClipboard(2)">Set clipboard</button>
+                <button class="mini-control-button" onclick="getClipboard(2)">Get clipboard</button>
+                <button class="mini-control-button" onclick="sendTextAsKeys(2)">Send as keys</button>
+            </div>
+
+            <div class="device-section">
+                <div class="device-header"><span class="device-indicator loading" id="indicator3"></span><span class="device-name" id="deviceName3">Device 3</span></div>
+                <button class="mini-control-button" onclick="sendControl(3, 'power')">⏻ Power</button>
+                <button class="mini-control-button" onclick="sendControl(3, 'back')">← Back</button>
+                <button class="mini-control-button" onclick="sendControl(3, 'home')">⌂ Home</button>
+                <button class="mini-control-button" onclick="sendControl(3, 'menu')">☰ Menu</button>
+                <button class="mini-control-button" onclick="sendControl(3, 'vol-down')">🔽 Vol-</button>
+                <button class="mini-control-button" onclick="sendControl(3, 'vol-up')">🔼 Vol+</button>
+                <div class="mini-settings"><textarea id="text3" placeholder="clipboard / text input"></textarea></div>
+                <button class="mini-control-button" id="screenToggle3" onclick="toggleScreenPowerMode(3)">Screen OFF keep stream</button>
+                <button class="mini-control-button" onclick="setClipboard(3)">Set clipboard</button>
+                <button class="mini-control-button" onclick="getClipboard(3)">Get clipboard</button>
+                <button class="mini-control-button" onclick="sendTextAsKeys(3)">Send as keys</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="video-container">
+            <div class="stream-panel"><div class="stream-content"><video id="player1" autoplay muted playsinline></video></div></div>
+            <div class="stream-panel"><div class="stream-content"><video id="player2" autoplay muted playsinline></video></div></div>
+            <div class="stream-panel"><div class="stream-content"><video id="player3" autoplay muted playsinline></video></div></div>
+        </div>
+        <div id="debugStatusMulti" class="debug-status"></div>
+    </div>
+
+    <script>
+        function toggleSidebar() { document.getElementById('sidebar').classList.toggle('expanded'); }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const deviceUdids = [urlParams.get('device1'), urlParams.get('device2'), urlParams.get('device3')].filter(Boolean);
+        if (deviceUdids.length < 2 || deviceUdids.length > 3) {
+            alert('Provide 2 or 3 devices.');
+            window.location.href = '/';
+            throw new Error('Invalid device count');
+        }
+
+        if (!urlParams.get('device3')) {
+            document.querySelector('.stream-panel:nth-child(3)').style.display = 'none';
+            document.querySelector('.device-section:nth-child(4)').style.display = 'none';
+        }
+
+        const deviceNums = [1, 2, 3].filter((n) => n <= deviceUdids.length);
+        const devices = {};
+        deviceNums.forEach((n, idx) => {
+            devices[n] = { udid: deviceUdids[idx], videoEl: `player${n}`, indicator: `indicator${n}` };
+            document.getElementById(`deviceName${n}`).textContent = `Device ${n}: ${deviceUdids[idx]}`;
+        });
+
+        const muxers = {}, parsers = {}, inputs = {};
+        const pendingDefaultScreenOff = { 1: true, 2: true, 3: true };
+        const screenPowerOn = { 1: false, 2: false, 3: false };
+        const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
+
+        function initInput(deviceNum, width, height) {
+            const videoElement = document.getElementById(devices[deviceNum].videoEl);
+            function input_data_cb(data) {
+                socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
+            }
+            inputs[deviceNum] = new ScrcpyInput(input_data_cb, videoElement, width, height, false);
+            if (pendingDefaultScreenOff[deviceNum]) {
+                setTimeout(() => setScreenPowerMode(deviceNum, false), 250);
+            }
+        }
+
+        deviceNums.forEach((deviceNum) => {
+            const device = devices[deviceNum];
+            const videoElement = document.getElementById(device.videoEl);
+            muxers[deviceNum] = new JMuxer({
+                node: device.videoEl,
+                mode: 'video',
+                flushingTime: 0,
+                fps: 60,
+                clearBuffer: true,
+                onReady: () => { if (videoElement) videoElement.controls = false; }
+            });
+
+            parsers[deviceNum] = new VideoParser(({ type, data }) => {
+                if (type === 'nalu') {
+                    muxers[deviceNum].feed({ video: data });
+                } else if (type === 'init') {
+                    muxers[deviceNum].feed({ video: data['sps'] });
+                    muxers[deviceNum].feed({ video: data['pps'] });
+                } else if (type === 'screen_size') {
+                    initInput(deviceNum, data['width'], data['height']);
+                } else if (type === 'size_change' && inputs[deviceNum]) {
+                    inputs[deviceNum].resizeScreen(data['width'], data['height']);
+                }
+            });
+        });
+
+        function sendControl(deviceNum, action) {
+            const input = inputs[deviceNum];
+            if (!input || !devices[deviceNum]) return;
+            function injectKeyCode(keyCode, actionNum) {
+                const data = input.createKeyProtocolData(actionNum, keyCode, 0, 0);
+                socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
+            }
+            const keyCodeMap = {
+                'power': () => { input.screen_on_off(0); setTimeout(() => input.screen_on_off(1), 100); },
+                'vol-down': () => { injectKeyCode(25, 0); setTimeout(() => injectKeyCode(25, 1), 100); },
+                'vol-up': () => { injectKeyCode(24, 0); setTimeout(() => injectKeyCode(24, 1), 100); },
+                'back': () => { injectKeyCode(4, 0); setTimeout(() => injectKeyCode(4, 1), 100); },
+                'home': () => { injectKeyCode(3, 0); setTimeout(() => injectKeyCode(3, 1), 100); },
+                'menu': () => { injectKeyCode(187, 0); setTimeout(() => injectKeyCode(187, 1), 100); }
+            };
+            if (keyCodeMap[action]) keyCodeMap[action]();
+        }
+
+        function setScreenPowerMode(deviceNum, isOn) {
+            const input = inputs[deviceNum];
+            if (!input || !devices[deviceNum]) return;
+            input.set_screen_power_mode(isOn);
+            pendingDefaultScreenOff[deviceNum] = false;
+            screenPowerOn[deviceNum] = isOn;
+            document.getElementById(`screenToggle${deviceNum}`).textContent = isOn ? 'Screen ON' : 'Screen OFF keep stream';
+        }
+        function toggleScreenPowerMode(deviceNum) { setScreenPowerMode(deviceNum, !screenPowerOn[deviceNum]); }
+        function setClipboard(deviceNum) {
+            const input = inputs[deviceNum]; if (!input || !devices[deviceNum]) return;
+            const text = document.getElementById(`text${deviceNum}`).value || '';
+            socket.emit('control_data', { device_udid: devices[deviceNum].udid, data: input.createSetClipboardControlMessage(text, false) });
+        }
+        function getClipboard(deviceNum) {
+            const input = inputs[deviceNum]; if (!input || !devices[deviceNum]) return;
+            socket.emit('control_data', { device_udid: devices[deviceNum].udid, data: input.createGetClipboardControlMessage() });
+        }
+        function sendTextAsKeys(deviceNum) {
+            const input = inputs[deviceNum]; if (!input || !devices[deviceNum]) return;
+            const text = document.getElementById(`text${deviceNum}`).value || ''; if (!text) return;
+            socket.emit('control_data', { device_udid: devices[deviceNum].udid, data: input.createTextControlMessage(text) });
+        }
+
+        const socket = io({ reconnection: true, autoConnect: true });
+        function udidToDeviceNum(udid) {
+            return deviceNums.find((n) => devices[n].udid === udid) || null;
+        }
+
+        socket.on('video_data', (payload) => {
+            const deviceNum = udidToDeviceNum(payload.device_udid);
+            if (!deviceNum || !parsers[deviceNum]) return;
+            parsers[deviceNum].appendData(new Uint8Array(payload.data));
+            lastVideoDataAt[deviceNum] = Date.now();
+        });
+
+        socket.on('device_message', async (payload) => {
+            if (!payload) return;
+            const deviceNum = udidToDeviceNum(payload.device_udid);
+            if (!deviceNum) return;
+            const message = payload.message || {};
+            if (message.type === 'clipboard') {
+                const text = message.text || '';
+                document.getElementById(`text${deviceNum}`).value = text;
+            }
+        });
+
+        socket.on('connect', () => {
+            deviceNums.forEach((n) => socket.emit('start_device', { device_udid: devices[n].udid }));
+        });
+
+        socket.on('device_started', (data) => {
+            const deviceNum = udidToDeviceNum(data.device_udid);
+            if (!deviceNum) return;
+            document.getElementById(`indicator${deviceNum}`).classList.remove('loading');
+        });
+
+        socket.on('disconnect', () => {
+            deviceNums.forEach((n) => {
+                document.getElementById(`indicator${n}`).classList.add('loading');
+                pendingDefaultScreenOff[n] = true;
+            });
+        });
+
+        function updateDebugStatus() {
+            const socketState = socket.connected ? 'connected' : 'disconnected';
+            const lines = [`socket=${socketState} | layout=${window.innerWidth < window.innerHeight ? 'portrait' : 'landscape'}`];
+            deviceNums.forEach((n) => {
+                const age = ((Date.now() - lastVideoDataAt[n]) / 1000).toFixed(1);
+                lines.push(`d${n} frame_age_s=${age} screen_power=${screenPowerOn[n] ? 'on' : 'off'}`);
+            });
+            document.getElementById('debugStatusMulti').textContent = lines.join('\n');
+        }
+
+        function goBack() {
+            if (confirm('Stop streaming selected devices and go back?')) {
+                deviceNums.forEach((n) => socket.emit('stop_device', { device_udid: devices[n].udid }));
+                socket.disconnect();
+                window.location.href = '/';
+            }
+        }
+
+        window.addEventListener('beforeunload', () => {
+            deviceNums.forEach((n) => socket.emit('stop_device', { device_udid: devices[n].udid }));
+            socket.disconnect();
+        });
+
+        setInterval(updateDebugStatus, 500);
+        updateDebugStatus();
+    </script>
+</body>
+
+</html>
