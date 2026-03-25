@@ -139,8 +139,7 @@
                 <button class="mini-control-button" onclick="sendControl(1, 'back')">← Back</button>
                 <button class="mini-control-button" onclick="sendControl(1, 'home')">⌂ Home</button>
                 <button class="mini-control-button" onclick="sendControl(1, 'menu')">☰ Menu</button>
-                <button class="mini-control-button" onclick="sendControl(1, 'vol-down')">🔽 Vol-</button>
-                <button class="mini-control-button" onclick="sendControl(1, 'vol-up')">🔼 Vol+</button>
+                <button class="mini-control-button" onclick="sendControl(1, 'confirm')">✅ Confirm (OK)</button>
                 <div class="mini-settings"><textarea id="text1" placeholder="clipboard / text input"></textarea></div>
                 <button class="mini-control-button" id="screenToggle1" onclick="toggleScreenPowerMode(1)">Screen OFF keep stream</button>
                 <button class="mini-control-button" onclick="setClipboard(1)">Set clipboard</button>
@@ -154,8 +153,7 @@
                 <button class="mini-control-button" onclick="sendControl(2, 'back')">← Back</button>
                 <button class="mini-control-button" onclick="sendControl(2, 'home')">⌂ Home</button>
                 <button class="mini-control-button" onclick="sendControl(2, 'menu')">☰ Menu</button>
-                <button class="mini-control-button" onclick="sendControl(2, 'vol-down')">🔽 Vol-</button>
-                <button class="mini-control-button" onclick="sendControl(2, 'vol-up')">🔼 Vol+</button>
+                <button class="mini-control-button" onclick="sendControl(2, 'confirm')">✅ Confirm (OK)</button>
                 <div class="mini-settings"><textarea id="text2" placeholder="clipboard / text input"></textarea></div>
                 <button class="mini-control-button" id="screenToggle2" onclick="toggleScreenPowerMode(2)">Screen OFF keep stream</button>
                 <button class="mini-control-button" onclick="setClipboard(2)">Set clipboard</button>
@@ -169,8 +167,7 @@
                 <button class="mini-control-button" onclick="sendControl(3, 'back')">← Back</button>
                 <button class="mini-control-button" onclick="sendControl(3, 'home')">⌂ Home</button>
                 <button class="mini-control-button" onclick="sendControl(3, 'menu')">☰ Menu</button>
-                <button class="mini-control-button" onclick="sendControl(3, 'vol-down')">🔽 Vol-</button>
-                <button class="mini-control-button" onclick="sendControl(3, 'vol-up')">🔼 Vol+</button>
+                <button class="mini-control-button" onclick="sendControl(3, 'confirm')">✅ Confirm (OK)</button>
                 <div class="mini-settings"><textarea id="text3" placeholder="clipboard / text input"></textarea></div>
                 <button class="mini-control-button" id="screenToggle3" onclick="toggleScreenPowerMode(3)">Screen OFF keep stream</button>
                 <button class="mini-control-button" onclick="setClipboard(3)">Set clipboard</button>
@@ -264,8 +261,7 @@
             const keyCodeMap = {
                 // Use KEYCODE_POWER (26). screen_on_off() maps to BACK_OR_SCREEN_ON control and can behave like Back when display is already on.
                 'power': () => { injectKeyCode(26, 0); setTimeout(() => injectKeyCode(26, 1), 100); },
-                'vol-down': () => { injectKeyCode(25, 0); setTimeout(() => injectKeyCode(25, 1), 100); },
-                'vol-up': () => { injectKeyCode(24, 0); setTimeout(() => injectKeyCode(24, 1), 100); },
+                'confirm': () => { injectKeyCode(66, 0); setTimeout(() => injectKeyCode(66, 1), 100); },
                 'back': () => { injectKeyCode(4, 0); setTimeout(() => injectKeyCode(4, 1), 100); },
                 'home': () => { injectKeyCode(3, 0); setTimeout(() => injectKeyCode(3, 1), 100); },
                 'menu': () => { injectKeyCode(187, 0); setTimeout(() => injectKeyCode(187, 1), 100); }
