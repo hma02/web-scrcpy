@@ -408,6 +408,51 @@ class ScrcpyInput {
         return buffer;
     }
 
+    createSetScreenPowerModeProtocolData(screenPowerOn) {
+        const type = 10; // TYPE_SET_SCREEN_POWER_MODE
+
+        const buffer = new ArrayBuffer(1 + 1);
+        const view = new DataView(buffer);
+        let offset = 0;
+        view.setUint8(offset, type);
+        offset += 1;
+        view.setUint8(offset, screenPowerOn ? 1 : 0);
+        return buffer;
+    }
+
+    createTextControlMessage(text) {
+        const type = 1; // TYPE_TEXT
+        const encoder = new TextEncoder();
+        const textBytes = encoder.encode(text || '');
+        const buffer = new ArrayBuffer(1 + 4 + textBytes.length);
+        const view = new DataView(buffer);
+        view.setUint8(0, type);
+        view.setInt32(1, textBytes.length, false);
+        new Uint8Array(buffer, 5).set(textBytes);
+        return buffer;
+    }
+
+    createGetClipboardControlMessage() {
+        const type = 8; // TYPE_GET_CLIPBOARD
+        const buffer = new ArrayBuffer(1);
+        const view = new DataView(buffer);
+        view.setUint8(0, type);
+        return buffer;
+    }
+
+    createSetClipboardControlMessage(text, paste = false) {
+        const type = 9; // TYPE_SET_CLIPBOARD
+        const encoder = new TextEncoder();
+        const textBytes = encoder.encode(text || '');
+        const buffer = new ArrayBuffer(1 + 1 + 4 + textBytes.length);
+        const view = new DataView(buffer);
+        view.setUint8(0, type);
+        view.setUint8(1, paste ? 1 : 0);
+        view.setInt32(2, textBytes.length, false);
+        new Uint8Array(buffer, 6).set(textBytes);
+        return buffer;
+    }
+
     add_debug_item(text) {
         const p = document.createElement('p');
         p.textContent = text;
@@ -422,5 +467,10 @@ class ScrcpyInput {
         let data = null;
         data = this.createScreenProtocolData(action);
         this.callback(data)
+    }
+
+    set_screen_power_mode(screenPowerOn) {
+        const data = this.createSetScreenPowerModeProtocolData(screenPowerOn);
+        this.callback(data);
     }
 }

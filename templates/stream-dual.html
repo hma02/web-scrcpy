@@ -177,6 +177,17 @@
             margin-bottom: 4px;
         }
 
+        .mini-settings textarea {
+            width: 100%;
+            background: #262626;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 4px;
+            font-size: 11px;
+            min-height: 56px;
+        }
+
         .mini-control-button {
             width: 100%;
             padding: 6px;
@@ -278,6 +289,45 @@
             padding: 2px 0 4px 0;
         }
 
+        .debug-status {
+            padding: 8px 10px;
+            background: #111;
+            border-top: 1px solid #333;
+            color: #9ad;
+            font-size: 12px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+
+        .stalled-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 3000;
+        }
+
+        .stalled-overlay.visible {
+            display: flex;
+        }
+
+        .stalled-box {
+            background: #1e1e1e;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 16px;
+            color: #fff;
+            width: min(420px, calc(100vw - 32px));
+        }
+
+        .stalled-actions {
+            margin-top: 12px;
+            display: flex;
+            gap: 8px;
+        }
+
         @media (max-width: 1024px) {
             body {
                 display: flex;
@@ -354,6 +404,14 @@
                     <button class="mini-control-button" title="Menu" onclick="sendControl(1, 'menu')">☰ Menu</button>
                     <button class="mini-control-button" title="Volume Down" onclick="sendControl(1, 'vol-down')">🔽 Vol-</button>
                     <button class="mini-control-button" title="Volume Up" onclick="sendControl(1, 'vol-up')">🔼 Vol+</button>
+                    <div class="mini-control-group">More 1</div>
+                    <div class="mini-settings">
+                        <textarea id="text1" placeholder="clipboard / text input"></textarea>
+                    </div>
+                    <button class="mini-control-button" id="screenToggle1" onclick="toggleScreenPowerMode(1)">Screen OFF keep stream</button>
+                    <button class="mini-control-button" onclick="setClipboard(1)">Set clipboard</button>
+                    <button class="mini-control-button" onclick="getClipboard(1)">Get clipboard</button>
+                    <button class="mini-control-button" onclick="sendTextAsKeys(1)">Send as keys</button>
                 </div>
             </div>
 
@@ -371,6 +429,14 @@
                     <button class="mini-control-button" title="Menu" onclick="sendControl(2, 'menu')">☰ Menu</button>
                     <button class="mini-control-button" title="Volume Down" onclick="sendControl(2, 'vol-down')">🔽 Vol-</button>
                     <button class="mini-control-button" title="Volume Up" onclick="sendControl(2, 'vol-up')">🔼 Vol+</button>
+                    <div class="mini-control-group">More 2</div>
+                    <div class="mini-settings">
+                        <textarea id="text2" placeholder="clipboard / text input"></textarea>
+                    </div>
+                    <button class="mini-control-button" id="screenToggle2" onclick="toggleScreenPowerMode(2)">Screen OFF keep stream</button>
+                    <button class="mini-control-button" onclick="setClipboard(2)">Set clipboard</button>
+                    <button class="mini-control-button" onclick="getClipboard(2)">Get clipboard</button>
+                    <button class="mini-control-button" onclick="sendTextAsKeys(2)">Send as keys</button>
                 </div>
             </div>
         </div>
@@ -390,6 +456,17 @@
                 <div class="stream-content">
                     <video id="player2" autoplay muted webkit-playsinline playsinline x5-playsinline></video>
                 </div>
+            </div>
+        </div>
+        <div id="debugStatusDual" class="debug-status"></div>
+    </div>
+    <div id="dualReconnectPopup" class="stalled-overlay">
+        <div class="stalled-box">
+            <strong id="dualPopupTitle">Stream appears stalled</strong>
+            <p id="dualPopupText" style="margin-top:8px;font-size:13px;color:#ddd;"></p>
+            <div class="stalled-actions">
+                <button class="btn-header" onclick="dualPopupReconnectNow()">Reconnect now</button>
+                <button class="btn-header" onclick="dualPopupKeepWaiting()">Keep waiting</button>
             </div>
         </div>
     </div>
@@ -421,6 +498,15 @@
         const muxers = {};
         const parsers = {};
         const inputs = {};
+        const pendingDefaultScreenOff = { 1: true, 2: true };
+        const screenPowerOn = { 1: false, 2: false };
+        const lastVideoDataAt = { 1: Date.now(), 2: Date.now() };
+        const stallPromptShown = { 1: false, 2: false };
+        const autoResumeInProgress = { 1: false, 2: false };
+        const streamState = { 1: 'stopped-streaming', 2: 'stopped-streaming' };
+        const promptDeadline = { 1: null, 2: null };
+        const promptTimer = { 1: null, 2: null };
+        let dualPopupDeviceNum = null;
 
         // Initialize muxer and parser for each device
         Object.keys(devices).forEach(deviceNum => {
@@ -475,6 +561,11 @@
 
             const videoElement = document.getElementById(devices[deviceNum].videoEl);
             inputs[deviceNum] = new ScrcpyInput(input_data_cb, videoElement, width, height, false);
+            if (pendingDefaultScreenOff[deviceNum]) {
+                setTimeout(() => {
+                    setScreenPowerMode(deviceNum, false);
+                }, 250);
+            }
         }
 
         function sendControl(deviceNum, action) {
@@ -508,6 +599,44 @@
             }
         }
 
+        function setScreenPowerMode(deviceNum, isOn) {
+            const input = inputs[deviceNum];
+            if (!input) return;
+            input.set_screen_power_mode(isOn);
+            pendingDefaultScreenOff[deviceNum] = false;
+            screenPowerOn[deviceNum] = isOn;
+            const label = isOn ? 'Screen ON' : 'Screen OFF keep stream';
+            document.getElementById(`screenToggle${deviceNum}`).textContent = label;
+        }
+
+        function toggleScreenPowerMode(deviceNum) {
+            setScreenPowerMode(deviceNum, !screenPowerOn[deviceNum]);
+        }
+
+        function setClipboard(deviceNum) {
+            const input = inputs[deviceNum];
+            if (!input) return;
+            const text = document.getElementById(`text${deviceNum}`).value || '';
+            const data = input.createSetClipboardControlMessage(text, false);
+            socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
+        }
+
+        function getClipboard(deviceNum) {
+            const input = inputs[deviceNum];
+            if (!input) return;
+            const data = input.createGetClipboardControlMessage();
+            socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
+        }
+
+        function sendTextAsKeys(deviceNum) {
+            const input = inputs[deviceNum];
+            if (!input) return;
+            const text = document.getElementById(`text${deviceNum}`).value || '';
+            if (!text) return;
+            const data = input.createTextControlMessage(text);
+            socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
+        }
+
         const socket = io({
             reconnection: true,
             autoConnect: true
@@ -518,6 +647,27 @@
             if (deviceNum && parsers[deviceNum]) {
                 const newData = new Uint8Array(data.data);
                 parsers[deviceNum].appendData(newData);
+                lastVideoDataAt[deviceNum] = Date.now();
+                stallPromptShown[deviceNum] = false;
+                streamState[deviceNum] = 'streaming';
+            }
+        });
+
+        socket.on('device_message', async (payload) => {
+            if (!payload) return;
+            const deviceNum = payload.device_udid === device1Udid ? 1 : (payload.device_udid === device2Udid ? 2 : null);
+            if (!deviceNum) return;
+            const message = payload.message || {};
+            if (message.type === 'clipboard') {
+                const text = message.text || '';
+                document.getElementById(`text${deviceNum}`).value = text;
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    try {
+                        await navigator.clipboard.writeText(text);
+                    } catch (e) {
+                        console.debug('Clipboard write failed:', e);
+                    }
+                }
             }
         });
 
@@ -530,9 +680,11 @@
         socket.on('device_started', (data) => {
             if (data.device_udid === device1Udid) {
                 document.getElementById('indicator1').classList.remove('loading');
+                streamState[1] = 'streaming';
                 console.log('Device 1 started');
             } else if (data.device_udid === device2Udid) {
                 document.getElementById('indicator2').classList.remove('loading');
+                streamState[2] = 'streaming';
                 console.log('Device 2 started');
             }
         });
@@ -544,8 +696,124 @@
         socket.on('disconnect', () => {
             document.getElementById('indicator1').classList.add('loading');
             document.getElementById('indicator2').classList.add('loading');
+            pendingDefaultScreenOff[1] = true;
+            pendingDefaultScreenOff[2] = true;
+            stallPromptShown[1] = false;
+            stallPromptShown[2] = false;
+            dismissDualPopup(1);
+            dismissDualPopup(2);
+            streamState[1] = 'stopped-streaming';
+            streamState[2] = 'stopped-streaming';
             console.log('Disconnected from server');
         });
+
+        function reconnectDevice(deviceNum) {
+            const udid = devices[deviceNum].udid;
+            streamState[deviceNum] = 'stopped-streaming';
+            socket.emit('stop_device', { device_udid: udid });
+            setTimeout(() => {
+                socket.emit('start_device', { device_udid: udid });
+            }, 300);
+        }
+
+        function reconnectDeviceAuto(deviceNum, reason) {
+            if (autoResumeInProgress[deviceNum]) return;
+            autoResumeInProgress[deviceNum] = true;
+            console.log(`Attempting auto-resume reconnect for device ${deviceNum} (${reason})...`);
+            reconnectDevice(deviceNum);
+            setTimeout(() => {
+                autoResumeInProgress[deviceNum] = false;
+            }, 2500);
+        }
+
+        function dismissDualPopup(deviceNum) {
+            if (promptTimer[deviceNum]) {
+                clearTimeout(promptTimer[deviceNum]);
+                promptTimer[deviceNum] = null;
+            }
+            promptDeadline[deviceNum] = null;
+            dualPopupDeviceNum = null;
+            document.getElementById('dualReconnectPopup').classList.remove('visible');
+        }
+
+        function showDualReconnectPopup(deviceNum) {
+            const popupTimeoutMs = 5000;
+            stallPromptShown[deviceNum] = true;
+            streamState[deviceNum] = 'stopped-streaming';
+            dualPopupDeviceNum = deviceNum;
+            promptDeadline[deviceNum] = Date.now() + popupTimeoutMs;
+            document.getElementById('dualPopupTitle').textContent = `Device ${deviceNum} stream appears stalled`;
+            document.getElementById('dualReconnectPopup').classList.add('visible');
+            if (promptTimer[deviceNum]) {
+                clearTimeout(promptTimer[deviceNum]);
+            }
+            promptTimer[deviceNum] = setTimeout(() => {
+                reconnectDevice(deviceNum);
+                dismissDualPopup(deviceNum);
+            }, popupTimeoutMs);
+        }
+
+        function dualPopupReconnectNow() {
+            if (!dualPopupDeviceNum) return;
+            reconnectDevice(dualPopupDeviceNum);
+            dismissDualPopup(dualPopupDeviceNum);
+        }
+
+        function dualPopupKeepWaiting() {
+            if (!dualPopupDeviceNum) return;
+            const deviceNum = dualPopupDeviceNum;
+            lastVideoDataAt[deviceNum] = Date.now();
+            stallPromptShown[deviceNum] = false;
+            dismissDualPopup(deviceNum);
+        }
+
+        setInterval(() => {
+            const stalledThresholdMs = 5000;
+            if (!socket.connected) return;
+            [1, 2].forEach((deviceNum) => {
+                if (Date.now() - lastVideoDataAt[deviceNum] > stalledThresholdMs && !stallPromptShown[deviceNum]) {
+                    showDualReconnectPopup(deviceNum);
+                }
+            });
+        }, 5000);
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible' || !socket.connected) {
+                return;
+            }
+            const snapshots = { 1: lastVideoDataAt[1], 2: lastVideoDataAt[2] };
+            setTimeout(() => {
+                [1, 2].forEach((deviceNum) => {
+                    const staleMs = Date.now() - lastVideoDataAt[deviceNum];
+                    const noNewFramesAfterVisible = lastVideoDataAt[deviceNum] === snapshots[deviceNum];
+                    if (noNewFramesAfterVisible && staleMs > 5000) {
+                        reconnectDeviceAuto(deviceNum, 'tab-visible-no-frames');
+                    }
+                });
+            }, 2500);
+        });
+
+        function updateDebugStatus() {
+            const attention = document.visibilityState === 'visible' ? 'on' : 'off';
+            const socketState = socket.connected ? 'connected' : 'disconnected';
+            const age1 = ((Date.now() - lastVideoDataAt[1]) / 1000).toFixed(1);
+            const age2 = ((Date.now() - lastVideoDataAt[2]) / 1000).toFixed(1);
+            const eta1 = promptDeadline[1] ? Math.max(0, ((promptDeadline[1] - Date.now()) / 1000)).toFixed(1) : '-';
+            const eta2 = promptDeadline[2] ? Math.max(0, ((promptDeadline[2] - Date.now()) / 1000)).toFixed(1) : '-';
+            const line1 = `attention=${attention} | socket=${socketState}`;
+            const line2 = `d1 stream=${streamState[1]} frame_age_s=${age1} stall_prompt=${stallPromptShown[1] ? 'on' : 'off'} popup_eta_s=${eta1} auto_resume=${autoResumeInProgress[1] ? 'running' : 'idle'} screen_power=${screenPowerOn[1] ? 'on' : 'off'}`;
+            const line3 = `d2 stream=${streamState[2]} frame_age_s=${age2} stall_prompt=${stallPromptShown[2] ? 'on' : 'off'} popup_eta_s=${eta2} auto_resume=${autoResumeInProgress[2] ? 'running' : 'idle'} screen_power=${screenPowerOn[2] ? 'on' : 'off'}`;
+            document.getElementById('debugStatusDual').textContent = `${line1}\n${line2}\n${line3}`;
+            if (dualPopupDeviceNum) {
+                const remaining = promptDeadline[dualPopupDeviceNum]
+                    ? Math.max(0, ((promptDeadline[dualPopupDeviceNum] - Date.now()) / 1000)).toFixed(1)
+                    : '0.0';
+                document.getElementById('dualPopupText').textContent = `Auto reconnecting device ${dualPopupDeviceNum} in ${remaining}s unless you choose otherwise.`;
+            }
+        }
+
+        setInterval(updateDebugStatus, 500);
+        updateDebugStatus();
 
         function goBack() {
             if (confirm('Stop streaming both devices and go back?')) {
