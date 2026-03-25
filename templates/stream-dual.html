@@ -586,7 +586,8 @@
             }
 
             const keyCodeMap = {
-                'power': () => { input.screen_on_off(0); setTimeout(() => input.screen_on_off(1), 100); },
+                // Use KEYCODE_POWER (26). screen_on_off() maps to BACK_OR_SCREEN_ON control and can behave like Back when display is already on.
+                'power': () => { injectKeyCode(26, 0); setTimeout(() => injectKeyCode(26, 1), 100); },
                 'vol-down': () => { injectKeyCode(25, 0); setTimeout(() => injectKeyCode(25, 1), 100); },
                 'vol-up': () => { injectKeyCode(24, 0); setTimeout(() => injectKeyCode(24, 1), 100); },
                 'back': () => { injectKeyCode(4, 0); setTimeout(() => injectKeyCode(4, 1), 100); },
