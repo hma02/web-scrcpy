@@ -11,7 +11,8 @@
     "script:dist:start": "node ./index.js",
     "lint": "eslint src/ --ext .ts",
     "format": "eslint src/ --fix --ext .ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:unit": "node src/app/interactionHandler/touchPressure.test.js"
   },
   "author": "Sergey Volkov <drauggres@gmail.com>",
   "license": "MIT",
