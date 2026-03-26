@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect
 from flask_socketio import SocketIO, emit, send
 from scrcpy import Scrcpy
 from stream_lifecycle import detach_client_from_device
@@ -6,6 +6,7 @@ import argparse
 import queue
 import time
 import threading
+from urllib.parse import quote
 # Force inclusion of simple_websocket for threading async_mode in bundled binary
 import simple_websocket  # noqa: F401
 
@@ -29,6 +30,11 @@ device_locks = {}
 
 # Global lock for shared state maps.
 state_lock = threading.RLock()
+
+# Cache first stream chunks so late-joining viewers can receive decoder bootstrap data.
+device_bootstrap_chunks = {}
+device_bootstrap_bytes = {}
+BOOTSTRAP_MAX_BYTES = 512 * 1024
 
 video_bit_rate = "256000"
 max_fps = 10
@@ -61,6 +67,14 @@ def attach_client_to_device(client_sid, device_udid, queue_obj):
         watchers.append(client_sid)
         # Latest joined viewer gets control ownership by design.
         device_control_owner[device_udid] = client_sid
+        bootstrap_chunks = list(device_bootstrap_chunks.get(device_udid, []))
+
+    # Replay bootstrap stream bytes to late joiners (name/size/SPS/PPS headers etc.).
+    for chunk in bootstrap_chunks:
+        try:
+            queue_obj.put(chunk, block=False)
+        except queue.Full:
+            break
 
 
 def detach_client_and_update_owner(client_sid, device_udid):
@@ -82,6 +96,21 @@ def detach_client_and_update_owner(client_sid, device_udid):
         else:
             device_watchers.pop(device_udid, None)
             device_control_owner.pop(device_udid, None)
+            device_bootstrap_chunks.pop(device_udid, None)
+            device_bootstrap_bytes.pop(device_udid, None)
+
+
+def record_bootstrap_chunk(device_udid, data):
+    if not data:
+        return
+    with state_lock:
+        total = device_bootstrap_bytes.get(device_udid, 0)
+        if total >= BOOTSTRAP_MAX_BYTES:
+            return
+        remaining = BOOTSTRAP_MAX_BYTES - total
+        chunk = bytes(data[:remaining])
+        device_bootstrap_chunks.setdefault(device_udid, []).append(chunk)
+        device_bootstrap_bytes[device_udid] = total + len(chunk)
 
 @app.route('/')
 def index():
@@ -89,7 +118,10 @@ def index():
 
 @app.route('/stream-single')
 def stream_single():
-    return render_template('stream-single.html')
+    device_udid = request.args.get('device')
+    if not device_udid:
+        return redirect('/')
+    return redirect(f"/stream-multi?device1={quote(device_udid)}")
 
 @app.route('/stream-dual')
 def stream_dual():
@@ -160,6 +192,7 @@ def video_send_task(client_sid, device_udid):
 
 def send_video_data(device_udid, data):
     """Queue video data for all clients watching this device"""
+    record_bootstrap_chunk(device_udid, data)
     with state_lock:
         queues = list(device_video_queues.get(device_udid, []))
     for q in queues:
@@ -245,6 +278,8 @@ def handle_start_device(data):
                     device_contexts[device_udid] = scpy_ctx
                     device_video_queues.setdefault(device_udid, [])
                     device_watchers.setdefault(device_udid, [])
+                    device_bootstrap_chunks[device_udid] = []
+                    device_bootstrap_bytes[device_udid] = 0
 
             # Create queue for this client-device pair
             q = queue.Queue()

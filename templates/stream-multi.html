@@ -147,15 +147,19 @@
 
         const urlParams = new URLSearchParams(window.location.search);
         const deviceUdids = [urlParams.get('device1'), urlParams.get('device2'), urlParams.get('device3')].filter(Boolean);
-        if (deviceUdids.length < 2 || deviceUdids.length > 3) {
-            alert('Provide 2 or 3 devices.');
+        if (deviceUdids.length < 1 || deviceUdids.length > 3) {
+            alert('Provide 1 to 3 devices.');
             window.location.href = '/';
             throw new Error('Invalid device count');
         }
 
-        if (!urlParams.get('device3')) {
+        if (deviceUdids.length < 3) {
             document.getElementById('panel3').style.display = 'none';
             document.getElementById('sidebarTargetRow3').style.display = 'none';
+        }
+        if (deviceUdids.length < 2) {
+            document.getElementById('panel2').style.display = 'none';
+            document.getElementById('selectSidebar2').closest('label').style.display = 'none';
         }
 
         const deviceNums = [1, 2, 3].filter((n) => n <= deviceUdids.length);
@@ -165,6 +169,12 @@
             devices[n] = { udid: deviceUdids[idx], videoEl: `player${n}` };
             document.getElementById(`targetLabel${n}`).textContent = `Device ${n}: ${deviceUdids[idx]}`;
         });
+
+        if (deviceUdids.length === 1) {
+            const onlySelect = document.getElementById('selectSidebar1');
+            onlySelect.checked = true;
+            onlySelect.disabled = true;
+        }
 
         deviceNums.forEach((n) => {
             const side = document.getElementById(`selectSidebar${n}`);
