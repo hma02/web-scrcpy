@@ -328,33 +328,6 @@
         let streamState = 'stopped-streaming';
         let reconnectPromptTimer = null;
         let reconnectPromptDeadline = null;
-        let playRetryTimer = null;
-
-        function requestVideoAutoplay() {
-            const videoElement = document.getElementById('player');
-            if (!videoElement) return;
-            const playPromise = videoElement.play();
-            if (playPromise && typeof playPromise.catch === 'function') {
-                playPromise.catch((err) => {
-                    console.debug('Autoplay blocked or delayed:', err);
-                });
-            }
-        }
-
-        function scheduleAutoplayRetries() {
-            if (playRetryTimer) return;
-            let attempts = 0;
-            playRetryTimer = setInterval(() => {
-                attempts += 1;
-                requestVideoAutoplay();
-                const videoElement = document.getElementById('player');
-                if (!videoElement || !videoElement.paused || attempts >= 10) {
-                    clearInterval(playRetryTimer);
-                    playRetryTimer = null;
-                }
-            }, 500);
-        }
-
         const parser = new VideoParser(({ type, data }) => {
             if (type === 'nalu') {
                 muxer.feed({ video: data });
@@ -523,8 +496,6 @@
             if (data.device_udid === deviceUdid) {
                 const newData = new Uint8Array(data.data);
                 parser.appendData(newData);
-                requestVideoAutoplay();
-                scheduleAutoplayRetries();
                 lastVideoDataAt = Date.now();
                 stallPromptShown = false;
                 streamState = 'streaming';
@@ -671,10 +642,6 @@
 
         setInterval(updateDebugStatus, 500);
         updateDebugStatus();
-
-        ['touchstart', 'click'].forEach((evtName) => {
-            document.addEventListener(evtName, requestVideoAutoplay, { passive: true });
-        });
 
         function goBack() {
             if (confirm('Stop streaming and go back?')) {
