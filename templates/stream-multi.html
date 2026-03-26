@@ -9,7 +9,8 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root { --sidebar-width: 280px; }
         body {
-            height: 100vh;
+            height: 100svh;
+            min-height: 100svh;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -80,8 +81,24 @@
         }
 
         @media (orientation: portrait) {
-            .video-container { flex-direction: column; overflow: hidden; }
-            .stream-panel { display: none; width: 100%; height: 100%; aspect-ratio: auto; flex: 1 1 auto; }
+            .main-content {
+                /* Keep content above mobile browser bottom controls when possible. */
+                padding-bottom: max(env(safe-area-inset-bottom), 14px);
+            }
+            .video-container {
+                flex-direction: column;
+                overflow: hidden;
+                align-items: flex-end;
+                padding: 6px 6px 56px 56px;
+            }
+            .stream-panel {
+                display: none;
+                width: min(100%, calc(100% - 36px));
+                height: calc(100% - 10px);
+                aspect-ratio: auto;
+                flex: 1 1 auto;
+                align-self: flex-end;
+            }
             .stream-panel.active-portrait { display: flex; }
         }
     </style>
