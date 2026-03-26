@@ -17,38 +17,43 @@ def reset_state():
     app_module.device_contexts.clear()
     app_module.device_watchers.clear()
     app_module.device_control_owner.clear()
-    app_module.device_bootstrap_chunks.clear()
-    app_module.device_bootstrap_bytes.clear()
+    app_module.device_stream_buffers.clear()
+    app_module.device_stream_headers.clear()
+    app_module.device_recent_packets.clear()
+    app_module.device_latest_sps_packet.clear()
+    app_module.device_latest_pps_packet.clear()
     app_module.device_locks.clear()
 
 
 def test_bootstrap_is_replayed_to_late_joiner():
     reset_state()
     device = "d1"
-    app_module.device_bootstrap_chunks[device] = [b"first", b"second"]
-    app_module.device_bootstrap_bytes[device] = len(b"first") + len(b"second")
+    app_module.device_stream_headers[device] = b"h" * app_module.STREAM_HEADER_BYTES
+    app_module.device_latest_sps_packet[device] = b"sps"
+    app_module.device_latest_pps_packet[device] = b"pps"
+    app_module.device_recent_packets[device] = app_module.deque([b"p1", b"p2"], maxlen=10)
 
     q = queue.Queue()
     app_module.attach_client_to_device("c1", device, q)
 
-    assert q.get_nowait() == b"first"
-    assert q.get_nowait() == b"second"
+    assert q.get_nowait() == b"h" * app_module.STREAM_HEADER_BYTES
+    assert q.get_nowait() == b"sps"
+    assert q.get_nowait() == b"pps"
+    assert q.get_nowait() == b"p1"
+    assert q.get_nowait() == b"p2"
     assert app_module.device_control_owner[device] == "c1"
 
 
-def test_record_bootstrap_chunk_is_capped():
+def test_process_stream_chunk_emits_aligned_chunks():
     reset_state()
     device = "d2"
-    oversized = b"x" * (app_module.BOOTSTRAP_MAX_BYTES + 1024)
-    app_module.record_bootstrap_chunk(device, oversized)
+    header = b"h" * app_module.STREAM_HEADER_BYTES
+    payload = b"\x00\x00\x00\x01\x65\x01\x02"
+    packet = b"\x00" * 8 + len(payload).to_bytes(4, "big", signed=True) + payload
 
-    assert app_module.device_bootstrap_bytes[device] == app_module.BOOTSTRAP_MAX_BYTES
-    assert len(app_module.device_bootstrap_chunks[device][0]) == app_module.BOOTSTRAP_MAX_BYTES
-
-    # Additional chunks should be ignored once cap is reached.
-    app_module.record_bootstrap_chunk(device, b"more")
-    assert app_module.device_bootstrap_bytes[device] == app_module.BOOTSTRAP_MAX_BYTES
-    assert len(app_module.device_bootstrap_chunks[device]) == 1
+    chunks = app_module._process_stream_chunk_locked(device, header + packet)
+    assert chunks[0] == header
+    assert chunks[1] == packet
 
 
 def test_latest_joined_viewer_owns_control_and_falls_back_on_detach():
@@ -56,8 +61,7 @@ def test_latest_joined_viewer_owns_control_and_falls_back_on_detach():
     device = "d3"
     ctx = DummyScrcpy()
     app_module.device_contexts[device] = ctx
-    app_module.device_bootstrap_chunks[device] = []
-    app_module.device_bootstrap_bytes[device] = 0
+    app_module.device_stream_headers[device] = b"h" * app_module.STREAM_HEADER_BYTES
 
     q1 = queue.Queue()
     q2 = queue.Queue()
@@ -75,5 +79,5 @@ def test_latest_joined_viewer_owns_control_and_falls_back_on_detach():
     assert device not in app_module.device_control_owner
     assert device not in app_module.device_watchers
     assert device not in app_module.device_contexts
-    assert device not in app_module.device_bootstrap_chunks
+    assert device not in app_module.device_stream_headers
     assert ctx.stop_calls == 1

@@ -7,6 +7,7 @@ import queue
 import time
 import threading
 from urllib.parse import quote
+from collections import deque
 # Force inclusion of simple_websocket for threading async_mode in bundled binary
 import simple_websocket  # noqa: F401
 
@@ -31,10 +32,16 @@ device_locks = {}
 # Global lock for shared state maps.
 state_lock = threading.RLock()
 
-# Cache first stream chunks so late-joining viewers can receive decoder bootstrap data.
-device_bootstrap_chunks = {}
-device_bootstrap_bytes = {}
-BOOTSTRAP_MAX_BYTES = 512 * 1024
+# Per-device stream parsing/cache state to support late joiners at packet boundaries.
+STREAM_HEADER_BYTES = 76  # 64-byte device name + 12-byte initial video size block
+REPLAY_RECENT_PACKET_COUNT = 40
+RECENT_PACKET_HISTORY = 240
+MAX_PACKET_SIZE = 2 * 1024 * 1024
+device_stream_buffers = {}
+device_stream_headers = {}
+device_recent_packets = {}
+device_latest_sps_packet = {}
+device_latest_pps_packet = {}
 
 video_bit_rate = "256000"
 max_fps = 10
@@ -67,7 +74,7 @@ def attach_client_to_device(client_sid, device_udid, queue_obj):
         watchers.append(client_sid)
         # Latest joined viewer gets control ownership by design.
         device_control_owner[device_udid] = client_sid
-        bootstrap_chunks = list(device_bootstrap_chunks.get(device_udid, []))
+        bootstrap_chunks = build_replay_chunks_locked(device_udid)
 
     # Replay bootstrap stream bytes to late joiners (name/size/SPS/PPS headers etc.).
     for chunk in bootstrap_chunks:
@@ -96,21 +103,87 @@ def detach_client_and_update_owner(client_sid, device_udid):
         else:
             device_watchers.pop(device_udid, None)
             device_control_owner.pop(device_udid, None)
-            device_bootstrap_chunks.pop(device_udid, None)
-            device_bootstrap_bytes.pop(device_udid, None)
+            clear_stream_cache_locked(device_udid)
 
 
-def record_bootstrap_chunk(device_udid, data):
+def clear_stream_cache_locked(device_udid):
+    device_stream_buffers.pop(device_udid, None)
+    device_stream_headers.pop(device_udid, None)
+    device_recent_packets.pop(device_udid, None)
+    device_latest_sps_packet.pop(device_udid, None)
+    device_latest_pps_packet.pop(device_udid, None)
+
+
+def _extract_nalu_type(packet_bytes):
+    if len(packet_bytes) < 17:
+        return None
+    if packet_bytes[12:16] == b"\x00\x00\x00\x01":
+        return packet_bytes[16] & 0x1F
+    return None
+
+
+def _process_stream_chunk_locked(device_udid, data):
+    """
+    Convert raw recv() chunks into protocol-aligned chunks:
+    - first emits stream header block (76 bytes)
+    - then emits complete packet blocks (12-byte packet header + payload)
+    """
     if not data:
-        return
-    with state_lock:
-        total = device_bootstrap_bytes.get(device_udid, 0)
-        if total >= BOOTSTRAP_MAX_BYTES:
-            return
-        remaining = BOOTSTRAP_MAX_BYTES - total
-        chunk = bytes(data[:remaining])
-        device_bootstrap_chunks.setdefault(device_udid, []).append(chunk)
-        device_bootstrap_bytes[device_udid] = total + len(chunk)
+        return []
+
+    out_chunks = []
+    buffer = device_stream_buffers.setdefault(device_udid, bytearray())
+    buffer.extend(data)
+
+    if device_udid not in device_stream_headers:
+        if len(buffer) < STREAM_HEADER_BYTES:
+            return []
+        header = bytes(buffer[:STREAM_HEADER_BYTES])
+        del buffer[:STREAM_HEADER_BYTES]
+        device_stream_headers[device_udid] = header
+        out_chunks.append(header)
+
+    recent = device_recent_packets.setdefault(device_udid, deque(maxlen=RECENT_PACKET_HISTORY))
+    while len(buffer) >= 12:
+        packet_size = int.from_bytes(buffer[8:12], byteorder='big', signed=True)
+        if packet_size <= 0 or packet_size > MAX_PACKET_SIZE:
+            # Desync safety: shift one byte and keep scanning.
+            del buffer[0]
+            continue
+        full_size = 12 + packet_size
+        if len(buffer) < full_size:
+            break
+        packet = bytes(buffer[:full_size])
+        del buffer[:full_size]
+
+        nalu_type = _extract_nalu_type(packet)
+        if nalu_type == 7:
+            device_latest_sps_packet[device_udid] = packet
+        elif nalu_type == 8:
+            device_latest_pps_packet[device_udid] = packet
+
+        recent.append(packet)
+        out_chunks.append(packet)
+
+    return out_chunks
+
+
+def build_replay_chunks_locked(device_udid):
+    header = device_stream_headers.get(device_udid)
+    if not header:
+        return []
+
+    replay = [header]
+    sps = device_latest_sps_packet.get(device_udid)
+    pps = device_latest_pps_packet.get(device_udid)
+    if sps:
+        replay.append(sps)
+    if pps:
+        replay.append(pps)
+    recent = list(device_recent_packets.get(device_udid, []))
+    if recent:
+        replay.extend(recent[-REPLAY_RECENT_PACKET_COUNT:])
+    return replay
 
 @app.route('/')
 def index():
@@ -192,14 +265,17 @@ def video_send_task(client_sid, device_udid):
 
 def send_video_data(device_udid, data):
     """Queue video data for all clients watching this device"""
-    record_bootstrap_chunk(device_udid, data)
     with state_lock:
+        chunks = _process_stream_chunk_locked(device_udid, data)
         queues = list(device_video_queues.get(device_udid, []))
-    for q in queues:
-        try:
-            q.put(data, block=False)
-        except queue.Full:
-            pass  # Skip if queue is full
+    if not chunks:
+        return
+    for chunk in chunks:
+        for q in queues:
+            try:
+                q.put(chunk, block=False)
+            except queue.Full:
+                pass  # Skip if queue is full
 
 def send_device_message(device_udid, message):
     """Send control channel device messages (e.g. clipboard) to all viewers of a device."""
@@ -278,8 +354,7 @@ def handle_start_device(data):
                     device_contexts[device_udid] = scpy_ctx
                     device_video_queues.setdefault(device_udid, [])
                     device_watchers.setdefault(device_udid, [])
-                    device_bootstrap_chunks[device_udid] = []
-                    device_bootstrap_bytes[device_udid] = 0
+                    clear_stream_cache_locked(device_udid)
 
             # Create queue for this client-device pair
             q = queue.Queue()
