@@ -17,11 +17,13 @@ def reset_state():
     app_module.device_contexts.clear()
     app_module.device_watchers.clear()
     app_module.device_control_owner.clear()
+    app_module.device_stream_target.clear()
     app_module.device_stream_buffers.clear()
     app_module.device_stream_headers.clear()
     app_module.device_recent_packets.clear()
     app_module.device_latest_sps_packet.clear()
     app_module.device_latest_pps_packet.clear()
+    app_module.client_attention.clear()
     app_module.device_locks.clear()
 
 
@@ -42,6 +44,7 @@ def test_bootstrap_is_replayed_to_late_joiner():
     assert q.get_nowait() == b"p1"
     assert q.get_nowait() == b"p2"
     assert app_module.device_control_owner[device] == "c1"
+    assert app_module.device_stream_target[device] == "c1"
 
 
 def test_process_stream_chunk_emits_aligned_chunks():
@@ -69,15 +72,36 @@ def test_latest_joined_viewer_owns_control_and_falls_back_on_detach():
     app_module.attach_client_to_device("c2", device, q2)
 
     assert app_module.device_control_owner[device] == "c2"
+    assert app_module.device_stream_target[device] == "c2"
 
     app_module.detach_client_and_update_owner("c2", device)
     assert app_module.device_control_owner[device] == "c1"
+    assert app_module.device_stream_target[device] == "c1"
     assert device in app_module.device_contexts
     assert ctx.stop_calls == 0
 
     app_module.detach_client_and_update_owner("c1", device)
     assert device not in app_module.device_control_owner
+    assert device not in app_module.device_stream_target
     assert device not in app_module.device_watchers
     assert device not in app_module.device_contexts
     assert device not in app_module.device_stream_headers
     assert ctx.stop_calls == 1
+
+
+def test_attention_switches_live_stream_target():
+    reset_state()
+    device = "d4"
+    app_module.device_stream_headers[device] = b"h" * app_module.STREAM_HEADER_BYTES
+
+    q1 = queue.Queue()
+    q2 = queue.Queue()
+    app_module.attach_client_to_device("ubuntu", device, q1)
+    app_module.attach_client_to_device("iphone", device, q2)
+    assert app_module.device_stream_target[device] == "iphone"
+
+    # Latest joined loses attention; previous attentive watcher regains stream+control.
+    app_module.client_attention["iphone"] = False
+    app_module.recompute_stream_target_and_owner_locked(device)
+    assert app_module.device_stream_target[device] == "ubuntu"
+    assert app_module.device_control_owner[device] == "ubuntu"

@@ -26,6 +26,9 @@ device_watchers = {}
 # Maps device_udid -> client_sid that currently owns control (latest watcher)
 device_control_owner = {}
 
+# Maps device_udid -> client_sid that currently receives live video.
+device_stream_target = {}
+
 # Per-device lock to avoid start/stop races across concurrent clients.
 device_locks = {}
 
@@ -42,6 +45,7 @@ device_stream_headers = {}
 device_recent_packets = {}
 device_latest_sps_packet = {}
 device_latest_pps_packet = {}
+client_attention = {}
 
 video_bit_rate = "256000"
 max_fps = 10
@@ -72,8 +76,9 @@ def attach_client_to_device(client_sid, device_udid, queue_obj):
         if client_sid in watchers:
             watchers.remove(client_sid)
         watchers.append(client_sid)
-        # Latest joined viewer gets control ownership by design.
-        device_control_owner[device_udid] = client_sid
+        # New connections are treated as visible/active unless stated otherwise.
+        client_attention.setdefault(client_sid, True)
+        recompute_stream_target_and_owner_locked(device_udid)
         bootstrap_chunks = build_replay_chunks_locked(device_udid)
 
     # Replay bootstrap stream bytes to late joiners (name/size/SPS/PPS headers etc.).
@@ -103,7 +108,9 @@ def detach_client_and_update_owner(client_sid, device_udid):
         else:
             device_watchers.pop(device_udid, None)
             device_control_owner.pop(device_udid, None)
+            device_stream_target.pop(device_udid, None)
             clear_stream_cache_locked(device_udid)
+        recompute_stream_target_and_owner_locked(device_udid)
 
 
 def clear_stream_cache_locked(device_udid):
@@ -184,6 +191,32 @@ def build_replay_chunks_locked(device_udid):
     if recent:
         replay.extend(recent[-REPLAY_RECENT_PACKET_COUNT:])
     return replay
+
+
+def recompute_stream_target_and_owner_locked(device_udid):
+    """
+    Choose who should receive live frames and control for a device.
+    Priority:
+    1) latest joined watcher that is currently visible/attentive
+    2) latest joined watcher regardless of visibility (fallback)
+    """
+    watchers = device_watchers.get(device_udid, [])
+    if not watchers:
+        device_stream_target.pop(device_udid, None)
+        device_control_owner.pop(device_udid, None)
+        return None
+
+    target = None
+    for sid in reversed(watchers):
+        if client_attention.get(sid, True):
+            target = sid
+            break
+    if target is None:
+        target = watchers[-1]
+
+    device_stream_target[device_udid] = target
+    device_control_owner[device_udid] = target
+    return target
 
 @app.route('/')
 def index():
@@ -267,15 +300,19 @@ def send_video_data(device_udid, data):
     """Queue video data for all clients watching this device"""
     with state_lock:
         chunks = _process_stream_chunk_locked(device_udid, data)
-        queues = list(device_video_queues.get(device_udid, []))
+        target_sid = device_stream_target.get(device_udid)
+        target_queue = None
+        if target_sid is not None:
+            target_queue = client_queues.get(target_sid, {}).get(device_udid)
     if not chunks:
         return
+    if target_queue is None:
+        return
     for chunk in chunks:
-        for q in queues:
-            try:
-                q.put(chunk, block=False)
-            except queue.Full:
-                pass  # Skip if queue is full
+        try:
+            target_queue.put(chunk, block=False)
+        except queue.Full:
+            pass  # Skip if queue is full
 
 def send_device_message(device_udid, message):
     """Send control channel device messages (e.g. clipboard) to all viewers of a device."""
@@ -297,6 +334,7 @@ def handle_connect():
     # Initialize per-client queue dict
     with state_lock:
         client_queues[client_sid] = {}
+        client_attention[client_sid] = True
 
 @socketio.on('disconnect')
 def handle_disconnect(reason=None):
@@ -313,6 +351,7 @@ def handle_disconnect(reason=None):
             detach_client_and_update_owner(client_sid, device_udid)
     with state_lock:
         client_queues.pop(client_sid, None)
+        client_attention.pop(client_sid, None)
     print('Client cleanup done')
 
 @socketio.on('start_device')
@@ -405,6 +444,26 @@ def handle_control_data(data):
             print(f"Error sending control data to {device_udid}: {e}")
     else:
         print(f"Device {device_udid} not found in contexts")
+
+
+@socketio.on('viewer_attention')
+def handle_viewer_attention(data):
+    """
+    Update viewer visibility/attention state.
+    Used to hand live stream/control back to an earlier viewer when the latest
+    joined viewer goes to background.
+    """
+    client_sid = request.sid
+    visible = bool((data or {}).get('visible', True))
+    with state_lock:
+        client_attention[client_sid] = visible
+        watched_devices = list(client_queues.get(client_sid, {}).keys())
+
+    for device_udid in watched_devices:
+        lock = get_device_lock(device_udid)
+        with lock:
+            with state_lock:
+                recompute_stream_target_and_owner_locked(device_udid)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Web server for scrcpy')

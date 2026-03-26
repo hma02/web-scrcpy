@@ -338,6 +338,9 @@
 
         const socket = io({ reconnection: true, autoConnect: true });
         const udidToDeviceNum = (udid) => deviceNums.find((n) => devices[n].udid === udid) || null;
+        const emitAttention = () => {
+            socket.emit('viewer_attention', { visible: document.visibilityState === 'visible' });
+        };
 
         socket.on('video_data', (payload) => {
             const deviceNum = udidToDeviceNum(payload.device_udid);
@@ -355,7 +358,13 @@
         });
 
         socket.on('connect', () => {
+            emitAttention();
             deviceNums.forEach((n) => socket.emit('start_device', { device_udid: devices[n].udid }));
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (!socket.connected) return;
+            emitAttention();
         });
 
         function updateDebugStatus() {
