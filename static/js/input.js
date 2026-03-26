@@ -1,3 +1,34 @@
+function classifySwipe(startPoint, endPoint, threshold = 12) {
+    const deltaX = endPoint.x - startPoint.x;
+    const deltaY = endPoint.y - startPoint.y;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+    const distance = Math.hypot(deltaX, deltaY);
+    const isSwipe = distance >= threshold;
+    let direction = 'tap';
+    if (isSwipe) {
+        if (absY >= absX) {
+            direction = deltaY < 0 ? 'up' : 'down';
+        } else {
+            direction = deltaX < 0 ? 'left' : 'right';
+        }
+    }
+    return { isSwipe, direction, deltaX, deltaY, distance };
+}
+
+function interpolateSwipePoints(startPoint, endPoint, segments = 8) {
+    const points = [];
+    const count = Math.max(2, segments);
+    for (let i = 1; i < count; i++) {
+        const ratio = i / count;
+        points.push({
+            x: startPoint.x + (endPoint.x - startPoint.x) * ratio,
+            y: startPoint.y + (endPoint.y - startPoint.y) * ratio,
+        });
+    }
+    return points;
+}
+
 class ScrcpyInput {
     constructor(callback, videoElement, width, height, debug = false) {
         this.callback = callback
@@ -8,8 +39,30 @@ class ScrcpyInput {
         let mouseY = null;
         let leftButtonIsPressed = false;
         let rightButtonIsPressed = false;
+        let ignoreMouseEventsUntil = 0;
+        let touchActive = false;
+        let touchHasMove = false;
+        let touchStart = null;
+        let touchCurrent = null;
+
+        videoElement.style.touchAction = 'none';
+
+        const mapClientPointToDevicePoint = (clientX, clientY) => {
+            const rect = videoElement.getBoundingClientRect();
+            const relativeX = clientX - rect.left;
+            const relativeY = clientY - rect.top;
+            const normalizedX = Math.max(0, Math.min(rect.width, relativeX));
+            const normalizedY = Math.max(0, Math.min(rect.height, relativeY));
+            return {
+                x: (normalizedX / rect.width) * this.width,
+                y: (normalizedY / rect.height) * this.height,
+            };
+        };
 
         document.addEventListener('mousedown', (event) => {
+            if (Date.now() < ignoreMouseEventsUntil) {
+                return;
+            }
             const rect = videoElement.getBoundingClientRect();
             const local_x = event.clientX - rect.left;
             const local_y = event.clientY - rect.top;
@@ -33,6 +86,9 @@ class ScrcpyInput {
         });
 
         document.addEventListener('mouseup', (event) => {
+            if (Date.now() < ignoreMouseEventsUntil) {
+                return;
+            }
             if (!leftButtonIsPressed) return;
 
             const rect = videoElement.getBoundingClientRect();
@@ -59,6 +115,9 @@ class ScrcpyInput {
         });
 
         document.addEventListener('mousemove', (event) => {
+            if (Date.now() < ignoreMouseEventsUntil) {
+                return;
+            }
             if (!leftButtonIsPressed) return;
 
             const rect = videoElement.getBoundingClientRect();
@@ -73,6 +132,70 @@ class ScrcpyInput {
                 this.callback(data);
             }
         });
+
+        videoElement.addEventListener('touchstart', (event) => {
+            if (!event.changedTouches || event.changedTouches.length === 0) return;
+            const touch = event.changedTouches[0];
+            const point = mapClientPointToDevicePoint(touch.clientX, touch.clientY);
+            touchActive = true;
+            touchHasMove = false;
+            touchStart = point;
+            touchCurrent = point;
+            ignoreMouseEventsUntil = Date.now() + 700;
+            const data = this.createTouchProtocolData(0, point.x, point.y, this.width, this.height, 0, 0, 65535);
+            this.callback(data);
+            event.preventDefault();
+        }, { passive: false });
+
+        videoElement.addEventListener('touchmove', (event) => {
+            if (!touchActive || !event.changedTouches || event.changedTouches.length === 0) return;
+            const touch = event.changedTouches[0];
+            const point = mapClientPointToDevicePoint(touch.clientX, touch.clientY);
+            touchCurrent = point;
+            touchHasMove = true;
+            const data = this.createTouchProtocolData(2, point.x, point.y, this.width, this.height, 0, 0, 65535);
+            this.callback(data);
+            event.preventDefault();
+        }, { passive: false });
+
+        videoElement.addEventListener('touchend', (event) => {
+            if (!touchActive || !touchStart) return;
+            const changedTouch = event.changedTouches && event.changedTouches.length > 0 ? event.changedTouches[0] : null;
+            const endPoint = changedTouch
+                ? mapClientPointToDevicePoint(changedTouch.clientX, changedTouch.clientY)
+                : touchCurrent || touchStart;
+            const swipe = classifySwipe(touchStart, endPoint);
+            if (!touchHasMove && swipe.isSwipe) {
+                const path = interpolateSwipePoints(touchStart, endPoint);
+                path.forEach((point) => {
+                    const moveData = this.createTouchProtocolData(2, point.x, point.y, this.width, this.height, 0, 0, 65535);
+                    this.callback(moveData);
+                });
+            }
+            const upData = this.createTouchProtocolData(1, endPoint.x, endPoint.y, this.width, this.height, 0, 0, 0);
+            this.callback(upData);
+            touchActive = false;
+            touchHasMove = false;
+            touchStart = null;
+            touchCurrent = null;
+            ignoreMouseEventsUntil = Date.now() + 700;
+            event.preventDefault();
+        }, { passive: false });
+
+        videoElement.addEventListener('touchcancel', (event) => {
+            if (!touchActive) return;
+            const endPoint = touchCurrent || touchStart;
+            if (endPoint) {
+                const upData = this.createTouchProtocolData(1, endPoint.x, endPoint.y, this.width, this.height, 0, 0, 0);
+                this.callback(upData);
+            }
+            touchActive = false;
+            touchHasMove = false;
+            touchStart = null;
+            touchCurrent = null;
+            ignoreMouseEventsUntil = Date.now() + 700;
+            event.preventDefault();
+        }, { passive: false });
 
         videoElement.addEventListener('contextmenu', (event) => {
             event.preventDefault();
@@ -473,4 +596,12 @@ class ScrcpyInput {
         const data = this.createSetScreenPowerModeProtocolData(screenPowerOn);
         this.callback(data);
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        ScrcpyInput,
+        classifySwipe,
+        interpolateSwipePoints,
+    };
 }
