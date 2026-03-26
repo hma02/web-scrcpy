@@ -1,10 +1,13 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect
 from flask_socketio import SocketIO, emit, send
 from scrcpy import Scrcpy
 from stream_lifecycle import detach_client_from_device
 import argparse
 import queue
 import time
+import threading
+from urllib.parse import quote
+from collections import deque
 # Force inclusion of simple_websocket for threading async_mode in bundled binary
 import simple_websocket  # noqa: F401
 
@@ -17,6 +20,33 @@ client_queues = {}
 # Maps device_udid -> list of queues for that device (for multi-client support)
 device_video_queues = {}
 
+# Maps device_udid -> list of watcher client_sids in join order
+device_watchers = {}
+
+# Maps device_udid -> client_sid that currently owns control (latest watcher)
+device_control_owner = {}
+
+# Maps device_udid -> client_sid that currently receives live video.
+device_stream_target = {}
+
+# Per-device lock to avoid start/stop races across concurrent clients.
+device_locks = {}
+
+# Global lock for shared state maps.
+state_lock = threading.RLock()
+
+# Per-device stream parsing/cache state to support late joiners at packet boundaries.
+STREAM_HEADER_BYTES = 76  # 64-byte device name + 12-byte initial video size block
+REPLAY_RECENT_PACKET_COUNT = 40
+RECENT_PACKET_HISTORY = 240
+MAX_PACKET_SIZE = 2 * 1024 * 1024
+device_stream_buffers = {}
+device_stream_headers = {}
+device_recent_packets = {}
+device_latest_sps_packet = {}
+device_latest_pps_packet = {}
+client_attention = {}
+
 video_bit_rate = "256000"
 max_fps = 10
 memorized_pin = ""
@@ -28,13 +58,176 @@ app.config['SECRET_KEY'] = 'secret!'
 # In a bundled binary we likely don't have eventlet/gevent installed; force threading.
 socketio = SocketIO(app, async_mode="threading")
 
+
+def get_device_lock(device_udid):
+    with state_lock:
+        lock = device_locks.get(device_udid)
+        if lock is None:
+            lock = threading.Lock()
+            device_locks[device_udid] = lock
+        return lock
+
+
+def attach_client_to_device(client_sid, device_udid, queue_obj):
+    with state_lock:
+        client_queues.setdefault(client_sid, {})[device_udid] = queue_obj
+        device_video_queues.setdefault(device_udid, []).append(queue_obj)
+        watchers = device_watchers.setdefault(device_udid, [])
+        if client_sid in watchers:
+            watchers.remove(client_sid)
+        watchers.append(client_sid)
+        # New connections are treated as visible/active unless stated otherwise.
+        client_attention.setdefault(client_sid, True)
+        recompute_stream_target_and_owner_locked(device_udid)
+        bootstrap_chunks = build_replay_chunks_locked(device_udid)
+
+    # Replay bootstrap stream bytes to late joiners (name/size/SPS/PPS headers etc.).
+    for chunk in bootstrap_chunks:
+        try:
+            queue_obj.put(chunk, block=False)
+        except queue.Full:
+            break
+
+
+def detach_client_and_update_owner(client_sid, device_udid):
+    with state_lock:
+        detach_client_from_device(
+            client_sid,
+            device_udid,
+            client_queues,
+            device_video_queues,
+            device_contexts
+        )
+
+        watchers = device_watchers.get(device_udid, [])
+        while client_sid in watchers:
+            watchers.remove(client_sid)
+        if watchers:
+            device_control_owner[device_udid] = watchers[-1]
+            device_watchers[device_udid] = watchers
+        else:
+            device_watchers.pop(device_udid, None)
+            device_control_owner.pop(device_udid, None)
+            device_stream_target.pop(device_udid, None)
+            clear_stream_cache_locked(device_udid)
+        recompute_stream_target_and_owner_locked(device_udid)
+
+
+def clear_stream_cache_locked(device_udid):
+    device_stream_buffers.pop(device_udid, None)
+    device_stream_headers.pop(device_udid, None)
+    device_recent_packets.pop(device_udid, None)
+    device_latest_sps_packet.pop(device_udid, None)
+    device_latest_pps_packet.pop(device_udid, None)
+
+
+def _extract_nalu_type(packet_bytes):
+    if len(packet_bytes) < 17:
+        return None
+    if packet_bytes[12:16] == b"\x00\x00\x00\x01":
+        return packet_bytes[16] & 0x1F
+    return None
+
+
+def _process_stream_chunk_locked(device_udid, data):
+    """
+    Convert raw recv() chunks into protocol-aligned chunks:
+    - first emits stream header block (76 bytes)
+    - then emits complete packet blocks (12-byte packet header + payload)
+    """
+    if not data:
+        return []
+
+    out_chunks = []
+    buffer = device_stream_buffers.setdefault(device_udid, bytearray())
+    buffer.extend(data)
+
+    if device_udid not in device_stream_headers:
+        if len(buffer) < STREAM_HEADER_BYTES:
+            return []
+        header = bytes(buffer[:STREAM_HEADER_BYTES])
+        del buffer[:STREAM_HEADER_BYTES]
+        device_stream_headers[device_udid] = header
+        out_chunks.append(header)
+
+    recent = device_recent_packets.setdefault(device_udid, deque(maxlen=RECENT_PACKET_HISTORY))
+    while len(buffer) >= 12:
+        packet_size = int.from_bytes(buffer[8:12], byteorder='big', signed=True)
+        if packet_size <= 0 or packet_size > MAX_PACKET_SIZE:
+            # Desync safety: shift one byte and keep scanning.
+            del buffer[0]
+            continue
+        full_size = 12 + packet_size
+        if len(buffer) < full_size:
+            break
+        packet = bytes(buffer[:full_size])
+        del buffer[:full_size]
+
+        nalu_type = _extract_nalu_type(packet)
+        if nalu_type == 7:
+            device_latest_sps_packet[device_udid] = packet
+        elif nalu_type == 8:
+            device_latest_pps_packet[device_udid] = packet
+
+        recent.append(packet)
+        out_chunks.append(packet)
+
+    return out_chunks
+
+
+def build_replay_chunks_locked(device_udid):
+    header = device_stream_headers.get(device_udid)
+    if not header:
+        return []
+
+    replay = [header]
+    sps = device_latest_sps_packet.get(device_udid)
+    pps = device_latest_pps_packet.get(device_udid)
+    if sps:
+        replay.append(sps)
+    if pps:
+        replay.append(pps)
+    recent = list(device_recent_packets.get(device_udid, []))
+    if recent:
+        replay.extend(recent[-REPLAY_RECENT_PACKET_COUNT:])
+    return replay
+
+
+def recompute_stream_target_and_owner_locked(device_udid):
+    """
+    Choose who should receive live frames and control for a device.
+    Priority:
+    1) latest joined watcher that is currently visible/attentive
+    2) latest joined watcher regardless of visibility (fallback)
+    """
+    watchers = device_watchers.get(device_udid, [])
+    if not watchers:
+        device_stream_target.pop(device_udid, None)
+        device_control_owner.pop(device_udid, None)
+        return None
+
+    target = None
+    for sid in reversed(watchers):
+        if client_attention.get(sid, True):
+            target = sid
+            break
+    if target is None:
+        target = watchers[-1]
+
+    device_stream_target[device_udid] = target
+    device_control_owner[device_udid] = target
+    return target
+
 @app.route('/')
 def index():
     return render_template('device-selector.html')
 
 @app.route('/stream-single')
 def stream_single():
-    return render_template('stream-single.html')
+    device_udid = request.args.get('device')
+    if not device_udid:
+        return redirect('/')
+    return redirect(f"/stream-multi?device1={quote(device_udid)}")
 
 @app.route('/stream-dual')
 def stream_dual():
@@ -105,28 +298,43 @@ def video_send_task(client_sid, device_udid):
 
 def send_video_data(device_udid, data):
     """Queue video data for all clients watching this device"""
-    if device_udid in device_video_queues:
-        for q in device_video_queues[device_udid]:
-            try:
-                q.put(data, block=False)
-            except queue.Full:
-                pass  # Skip if queue is full
+    with state_lock:
+        chunks = _process_stream_chunk_locked(device_udid, data)
+        target_sid = device_stream_target.get(device_udid)
+        target_queue = None
+        if target_sid is not None:
+            target_queue = client_queues.get(target_sid, {}).get(device_udid)
+    if not chunks:
+        return
+    if target_queue is None:
+        return
+    for chunk in chunks:
+        try:
+            target_queue.put(chunk, block=False)
+        except queue.Full:
+            pass  # Skip if queue is full
 
 def send_device_message(device_udid, message):
     """Send control channel device messages (e.g. clipboard) to all viewers of a device."""
-    for client_sid, queues_by_device in client_queues.items():
-        if device_udid in queues_by_device:
-            socketio.emit('device_message', {
-                'device_udid': device_udid,
-                'message': message
-            }, to=client_sid)
+    with state_lock:
+        recipients = [
+            client_sid for client_sid, queues_by_device in client_queues.items()
+            if device_udid in queues_by_device
+        ]
+    for client_sid in recipients:
+        socketio.emit('device_message', {
+            'device_udid': device_udid,
+            'message': message
+        }, to=client_sid)
 
 @socketio.on('connect')
 def handle_connect():
     client_sid = request.sid
     print(f'Client {client_sid} connected')
     # Initialize per-client queue dict
-    client_queues[client_sid] = {}
+    with state_lock:
+        client_queues[client_sid] = {}
+        client_attention[client_sid] = True
 
 @socketio.on('disconnect')
 def handle_disconnect(reason=None):
@@ -135,16 +343,15 @@ def handle_disconnect(reason=None):
     print(f'Client {client_sid} disconnected: {reason}')
     
     # Remove client from all device queues
-    if client_sid in client_queues:
-        for device_udid in list(client_queues[client_sid].keys()):
-            detach_client_from_device(
-                client_sid,
-                device_udid,
-                client_queues,
-                device_video_queues,
-                device_contexts
-            )
-        del client_queues[client_sid]
+    with state_lock:
+        device_ids = list(client_queues.get(client_sid, {}).keys())
+    for device_udid in device_ids:
+        lock = get_device_lock(device_udid)
+        with lock:
+            detach_client_and_update_owner(client_sid, device_udid)
+    with state_lock:
+        client_queues.pop(client_sid, None)
+        client_attention.pop(client_sid, None)
     print('Client cleanup done')
 
 @socketio.on('start_device')
@@ -160,36 +367,40 @@ def handle_start_device(data):
         return
     
     try:
-        # Create scrcpy instance for this device if not already exists
-        # OR if existing instance is not running (was stopped)
-        if device_udid not in device_contexts or not device_contexts[device_udid].running:
-            # Clean up old instance if it exists
-            if device_udid in device_contexts:
-                try:
-                    device_contexts[device_udid].scrcpy_stop()
-                except:
-                    pass
-                del device_contexts[device_udid]
-            
-            # Create fresh instance
-            scpy_ctx = Scrcpy(device_udid=device_udid)
-            scpy_ctx.scrcpy_start(
-                lambda data: send_video_data(device_udid, data),
-                video_bit_rate,
-                max_fps,
-                lambda message: send_device_message(device_udid, message),
-                device_udid=device_udid
-            )
-            device_contexts[device_udid] = scpy_ctx
-            device_video_queues[device_udid] = []
-        
-        # Create queue for this client-device pair
-        q = queue.Queue()
-        client_queues[client_sid][device_udid] = q
-        device_video_queues[device_udid].append(q)
-        
-        # Start video send task
-        socketio.start_background_task(video_send_task, client_sid, device_udid)
+        lock = get_device_lock(device_udid)
+        with lock:
+            existing_ctx = device_contexts.get(device_udid)
+            needs_start = existing_ctx is None or not existing_ctx.running
+            if needs_start:
+                if existing_ctx is not None:
+                    try:
+                        existing_ctx.scrcpy_stop()
+                    except Exception:
+                        pass
+                    with state_lock:
+                        device_contexts.pop(device_udid, None)
+
+                # Create fresh instance
+                scpy_ctx = Scrcpy(device_udid=device_udid)
+                scpy_ctx.scrcpy_start(
+                    lambda data: send_video_data(device_udid, data),
+                    video_bit_rate,
+                    max_fps,
+                    lambda message: send_device_message(device_udid, message),
+                    device_udid=device_udid
+                )
+                with state_lock:
+                    device_contexts[device_udid] = scpy_ctx
+                    device_video_queues.setdefault(device_udid, [])
+                    device_watchers.setdefault(device_udid, [])
+                    clear_stream_cache_locked(device_udid)
+
+            # Create queue for this client-device pair
+            q = queue.Queue()
+            attach_client_to_device(client_sid, device_udid, q)
+
+            # Start video send task
+            socketio.start_background_task(video_send_task, client_sid, device_udid)
         
         emit('device_started', {'device_udid': device_udid})
         print(f"Device {device_udid} started for client {client_sid}")
@@ -205,14 +416,12 @@ def handle_stop_device(data):
     device_udid = data.get('device_udid')
     
     print(f"Client {client_sid} stopping device {device_udid}")
+    if not device_udid:
+        return
     
-    detach_client_from_device(
-        client_sid,
-        device_udid,
-        client_queues,
-        device_video_queues,
-        device_contexts
-    )
+    lock = get_device_lock(device_udid)
+    with lock:
+        detach_client_and_update_owner(client_sid, device_udid)
 
 @socketio.on('control_data')
 def handle_control_data(data):
@@ -220,13 +429,41 @@ def handle_control_data(data):
     device_udid = data.get('device_udid')
     control_data = data.get('data')
     
-    if device_udid in device_contexts:
+    with state_lock:
+        owner_sid = device_control_owner.get(device_udid)
+        ctx = device_contexts.get(device_udid)
+
+    # Latest joined viewer exclusively owns controls for this device.
+    if owner_sid is not None and owner_sid != request.sid:
+        return
+
+    if ctx is not None:
         try:
-            device_contexts[device_udid].scrcpy_send_control(control_data)
+            ctx.scrcpy_send_control(control_data)
         except Exception as e:
             print(f"Error sending control data to {device_udid}: {e}")
     else:
         print(f"Device {device_udid} not found in contexts")
+
+
+@socketio.on('viewer_attention')
+def handle_viewer_attention(data):
+    """
+    Update viewer visibility/attention state.
+    Used to hand live stream/control back to an earlier viewer when the latest
+    joined viewer goes to background.
+    """
+    client_sid = request.sid
+    visible = bool((data or {}).get('visible', True))
+    with state_lock:
+        client_attention[client_sid] = visible
+        watched_devices = list(client_queues.get(client_sid, {}).keys())
+
+    for device_udid in watched_devices:
+        lock = get_device_lock(device_udid)
+        with lock:
+            with state_lock:
+                recompute_stream_target_and_owner_locked(device_udid)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Web server for scrcpy')
