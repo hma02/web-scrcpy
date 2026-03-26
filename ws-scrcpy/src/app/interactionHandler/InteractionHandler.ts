@@ -8,6 +8,7 @@ import TouchPointPNG from '../../public/images/multitouch/touch_point.png';
 import CenterPointPNG from '../../public/images/multitouch/center_point.png';
 import Util from '../Util';
 import { BasePlayer } from '../player/BasePlayer';
+import { resolveTouchPressure } from './touchPressure';
 
 interface Touch {
     action: number;
@@ -478,12 +479,7 @@ export abstract class InteractionHandler {
                 const event = InteractionHandler.buildTouchOnClient(item, screenInfo);
                 if (event) {
                     const { action, buttons, position, invalid } = event.touch;
-                    let pressure = 1;
-                    if (action === MotionEvent.ACTION_UP) {
-                        pressure = 0;
-                    } else if (typeof touch.force === 'number') {
-                        pressure = touch.force;
-                    }
+                    const pressure = resolveTouchPressure(action, touch.force);
                     if (!invalid) {
                         const message = new TouchControlMessage(action, pointerId, position, pressure, buttons);
                         messages.push(
