@@ -25,11 +25,13 @@
             gap: 10px;
             transition: left 0.3s ease;
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
             position: fixed;
             left: calc(-1 * var(--sidebar-width));
             top: 0;
             width: var(--sidebar-width);
-            height: 100vh;
+            height: 100dvh;
             z-index: 1000;
         }
         .sidebar.expanded { left: 0; }
@@ -67,7 +69,7 @@
         }
         .selector-box label { display: block; margin: 4px 0; font-size: 12px; }
 
-        .video-container { flex: 1; display: flex; gap: 2px; overflow: auto; flex-direction: row; }
+        .video-container { flex: 1; display: flex; gap: 2px; overflow: hidden; flex-direction: row; }
         .stream-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: #000; border: 1px solid #333; }
         .stream-content { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
         video { max-width: 100%; max-height: 100%; width: auto; height: auto; background: black; }
@@ -78,8 +80,9 @@
         }
 
         @media (orientation: portrait) {
-            .video-container { flex-direction: column; }
-            .stream-panel { width: 100%; aspect-ratio: 9 / 16; flex: 0 0 auto; }
+            .video-container { flex-direction: column; overflow: hidden; }
+            .stream-panel { display: none; width: 100%; height: 100%; aspect-ratio: auto; flex: 1 1 auto; }
+            .stream-panel.active-portrait { display: flex; }
         }
     </style>
     <script src="/static/js/socket.io.js"></script>
@@ -167,6 +170,7 @@
             const side = document.getElementById(`selectSidebar${n}`);
             side?.addEventListener('change', (e) => {
                 selectedState[n] = e.target.checked;
+                updateVisiblePanels();
             });
         });
 
@@ -174,10 +178,36 @@
             return deviceNums.filter((n) => selectedState[n]);
         }
 
+        function isPortraitMode() {
+            return window.innerHeight > window.innerWidth;
+        }
+
+        function updateVisiblePanels() {
+            if (!isPortraitMode()) {
+                deviceNums.forEach((n) => {
+                    const panel = document.getElementById(`panel${n}`);
+                    if (panel) {
+                        panel.classList.remove('active-portrait');
+                        panel.style.display = 'flex';
+                    }
+                });
+                return;
+            }
+
+            const selected = getSelectedDeviceNums();
+            const activeDeviceNum = selected.length > 0 ? selected[0] : null;
+            deviceNums.forEach((n) => {
+                const panel = document.getElementById(`panel${n}`);
+                if (!panel) return;
+                const isActive = n === activeDeviceNum;
+                panel.classList.toggle('active-portrait', isActive);
+                panel.style.display = isActive ? 'flex' : 'none';
+            });
+        }
+
         const muxers = {}, parsers = {}, inputs = {};
         const screenPowerOn = { 1: false, 2: false, 3: false };
         const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
-
         function initInput(deviceNum, width, height) {
             function input_data_cb(data) {
                 socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
@@ -341,6 +371,11 @@
 
         setInterval(updateDebugStatus, 500);
         updateDebugStatus();
+        updateVisiblePanels();
+
+        window.addEventListener('resize', updateVisiblePanels);
+        window.addEventListener('orientationchange', updateVisiblePanels);
+
     </script>
 </body>
 </html>

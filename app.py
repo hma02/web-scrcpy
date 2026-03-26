@@ -4,6 +4,7 @@ from scrcpy import Scrcpy
 from stream_lifecycle import detach_client_from_device
 import argparse
 import queue
+import time
 # Force inclusion of simple_websocket for threading async_mode in bundled binary
 import simple_websocket  # noqa: F401
 
@@ -19,8 +20,8 @@ device_video_queues = {}
 video_bit_rate = "256000"
 max_fps = 10
 memorized_pin = ""
-memorized_pin_history = []
-memorized_pin_next_id = 1
+server_start_time = time.time()
+device_first_seen = {}
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
@@ -46,10 +47,25 @@ def stream_multi():
 @app.route('/api/devices')
 def get_devices():
     """Return list of connected devices"""
+    global device_first_seen
     try:
         scpy_temp = Scrcpy()
         devices = scpy_temp.list_devices()
-        return jsonify(devices)
+        now = time.time()
+        payload = []
+        for raw_device in devices:
+            udid = raw_device if isinstance(raw_device, str) else raw_device.get('udid')
+            if not udid:
+                continue
+            if udid not in device_first_seen:
+                device_first_seen[udid] = now
+            alive_for_seconds = max(0.0, now - device_first_seen[udid])
+            payload.append({
+                'udid': udid,
+                'alive_for_seconds': alive_for_seconds,
+                'server_uptime_seconds': max(0.0, now - server_start_time)
+            })
+        return jsonify(payload)
     except Exception as e:
         print(f"Error getting devices: {e}")
         return jsonify([]), 500
@@ -57,14 +73,9 @@ def get_devices():
 @app.route('/api/pin', methods=['GET', 'POST'])
 def pin_memory():
     """In-memory PIN storage (lives only while server process is running)."""
-    global memorized_pin, memorized_pin_history, memorized_pin_next_id
+    global memorized_pin
     if request.method == 'GET':
-        history_payload = [{
-            'id': entry['id'],
-            'masked_pin': '*' * len(entry['pin']),
-            'saved_at': entry['saved_at']
-        } for entry in memorized_pin_history]
-        return jsonify({'pin': memorized_pin, 'history': history_payload})
+        return jsonify({'pin': memorized_pin})
 
     payload = request.get_json(silent=True) or {}
     pin = payload.get('pin', '')
@@ -72,29 +83,7 @@ def pin_memory():
         return jsonify({'error': 'pin must be a string'}), 400
     # PIN is expected as digits; keep only digits to avoid accidental extra chars.
     memorized_pin = ''.join(ch for ch in pin if ch.isdigit())
-    if memorized_pin:
-        from datetime import datetime
-        memorized_pin_history.insert(0, {
-            'id': memorized_pin_next_id,
-            'pin': memorized_pin,
-            'saved_at': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
-        })
-        memorized_pin_next_id += 1
     return jsonify({'pin': memorized_pin})
-
-@app.route('/api/pin/select', methods=['POST'])
-def select_pin_history():
-    """Select a PIN from in-memory history by id and set it as active memorized pin."""
-    global memorized_pin
-    payload = request.get_json(silent=True) or {}
-    selected_id = payload.get('id')
-    if not isinstance(selected_id, int):
-        return jsonify({'error': 'id must be int'}), 400
-    for entry in memorized_pin_history:
-        if entry['id'] == selected_id:
-            memorized_pin = entry['pin']
-            return jsonify({'pin': memorized_pin})
-    return jsonify({'error': 'id not found'}), 404
 
 def video_send_task(client_sid, device_udid):
     """Send video data for a specific device to a specific client"""

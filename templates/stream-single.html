@@ -82,12 +82,15 @@
             right: 12px;
             top: 58px;
             width: min(360px, calc(100vw - 24px));
+            max-height: calc(100vh - 80px);
             background: rgba(20, 20, 20, 0.96);
             border: 1px solid #555;
             border-radius: 8px;
             padding: 12px;
             z-index: 20;
             display: none;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
         }
 
         .settings-panel.visible {
@@ -325,7 +328,6 @@
         let streamState = 'stopped-streaming';
         let reconnectPromptTimer = null;
         let reconnectPromptDeadline = null;
-
         const parser = new VideoParser(({ type, data }) => {
             if (type === 'nalu') {
                 muxer.feed({ video: data });
