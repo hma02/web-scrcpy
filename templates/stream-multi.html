@@ -291,14 +291,19 @@
             }, 2600);
         }
 
+        function getEffectiveFooterOffsetPx() {
+            return isPortraitMode() ? Math.max(100, debugFooterExtraPx) : debugFooterExtraPx;
+        }
+
         function applyFooterPadding() {
             const debugEl = document.getElementById('debugStatusMulti');
             if (!debugEl) return;
             const safeInset = 'env(safe-area-inset-bottom, 0px)';
-            debugEl.style.paddingBottom = `calc(${debugFooterExtraPx}px + ${safeInset})`;
+            const effectiveOffsetPx = getEffectiveFooterOffsetPx();
+            debugEl.style.paddingBottom = `calc(${effectiveOffsetPx}px + ${safeInset})`;
             const valueEl = document.getElementById('footerAdjustValue');
             if (valueEl) {
-                valueEl.textContent = `${debugFooterExtraPx}px`;
+                valueEl.textContent = `${effectiveOffsetPx}px`;
             }
         }
 
@@ -546,16 +551,12 @@
         }
 
         function updateDebugStatus() {
-            const socketState = socket.connected ? 'connected' : 'disconnected';
-            const selected = getSelectedDeviceNums().join(',') || 'none';
             const activeDeviceNum = getSelectedDeviceNums()[0] || null;
-            const lines = [
-                `socket=${socketState} | selected=${selected} | layout=${window.innerWidth < window.innerHeight ? 'portrait' : 'landscape'} | cfg_bitrate=${streamConfig.videoBitRate}bps cfg_max_fps=${streamConfig.maxFps}`,
-            ];
+            const lines = [];
             if (activeDeviceNum) {
                 const s = statsByDevice[activeDeviceNum] || {};
                 lines.push(
-                    `d${activeDeviceNum} frame_age_s=${((Date.now() - lastVideoDataAt[activeDeviceNum]) / 1000).toFixed(1)} screen_power=${screenPowerOn[activeDeviceNum] ? 'on' : 'off'} in_kbps=${(s.kbps || 0).toFixed(1)} in_fps=${(s.inputFps || 0).toFixed(1)} render_fps=${(s.renderedFps || 0).toFixed(1)} decoded=${s.decodedFrames || 0} dropped=${s.droppedFrames || 0}`,
+                    `d${activeDeviceNum} frame_age_s=${((Date.now() - lastVideoDataAt[activeDeviceNum]) / 1000).toFixed(1)} in_kbps=${(s.kbps || 0).toFixed(1)} in_fps=${(s.inputFps || 0).toFixed(1)} render_fps=${(s.renderedFps || 0).toFixed(1)} decoded=${s.decodedFrames || 0} dropped=${s.droppedFrames || 0}`,
                 );
             }
             document.getElementById('debugStatusMulti').textContent = lines.join('\n');
@@ -577,13 +578,15 @@
         loadStreamConfig();
         setInterval(updateStatsTick, 1000);
         setInterval(updateDebugStatus, 500);
-        setInterval(forceScreenPowerOffForAllConnected, 5 * 60 * 1000);
+        setInterval(forceScreenPowerOffForAllConnected, 15 * 1000);
         loadFooterPaddingSetting();
         updateDebugStatus();
         updateVisiblePanels();
 
         window.addEventListener('resize', updateVisiblePanels);
         window.addEventListener('orientationchange', updateVisiblePanels);
+        window.addEventListener('resize', applyFooterPadding);
+        window.addEventListener('orientationchange', applyFooterPadding);
 
     </script>
 </body>
