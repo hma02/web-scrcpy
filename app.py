@@ -47,7 +47,7 @@ device_latest_sps_packet = {}
 device_latest_pps_packet = {}
 client_attention = {}
 
-video_bit_rate = "2000000"
+video_bit_rate = "800000"
 max_fps = 30
 memorized_pin = ""
 server_start_time = time.time()
@@ -476,7 +476,7 @@ def handle_viewer_attention(data):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Web server for scrcpy')
-    parser.add_argument('--video_bit_rate', default="2000000", help='scrcpy video bit rate')
+    parser.add_argument('--video_bit_rate', default="800000", help='scrcpy video bit rate')
     parser.add_argument('--max_fps', type=int, default=30, help='scrcpy max FPS')
     parser.add_argument('--port', type=int, default=5011, help='port to bind the web server to')
     args = parser.parse_args()
