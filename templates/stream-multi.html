@@ -60,6 +60,25 @@
             border-radius: 4px; cursor: pointer; margin-bottom: 6px; text-align: left;
         }
         .control-btn:hover { background-color: #444; }
+        .footer-adjust-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            margin: 8px 0 4px;
+            color: #ccc;
+            font-size: 12px;
+        }
+        .footer-adjust-row .control-btn {
+            margin: 0;
+            text-align: center;
+            width: auto;
+            min-width: 42px;
+            flex: 0 0 auto;
+        }
+        .footer-adjust-value {
+            font-family: monospace;
+            color: #9ad;
+        }
         .bulk-text {
             width: 100%; min-height: 70px; background: #262626; color: #fff; border: 1px solid #555;
             border-radius: 3px; padding: 6px; font-size: 12px;
@@ -127,6 +146,12 @@
             <button class="control-btn" onclick="getClipboardForSelected()">Get clipboard</button>
             <button class="control-btn" onclick="sendTextAsKeysForSelected()">Send as keys</button>
             <button class="control-btn" onclick="swipeUpPinAndOkForSelected()">Swipe Up -> Send Pin -> Send OK</button>
+            <div class="footer-adjust-row">
+                <span>Footer offset</span>
+                <button class="control-btn" onclick="adjustFooterPadding(-10)">−</button>
+                <button class="control-btn" onclick="adjustFooterPadding(10)">+</button>
+                <span id="footerAdjustValue" class="footer-adjust-value">18px</span>
+            </div>
         </div>
     </div>
 
@@ -225,8 +250,43 @@
         const muxers = {}, parsers = {}, inputs = {};
         const statsByDevice = {};
         const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown' };
+        const FOOTER_OFFSET_STORAGE_KEY = 'debugFooterExtraPx';
+        let debugFooterExtraPx = 18;
         const screenPowerOn = { 1: false, 2: false, 3: false };
         const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
+
+        function applyFooterPadding() {
+            const debugEl = document.getElementById('debugStatusMulti');
+            if (!debugEl) return;
+            const safeInset = 'env(safe-area-inset-bottom, 0px)';
+            debugEl.style.paddingBottom = `calc(${debugFooterExtraPx}px + ${safeInset})`;
+            const valueEl = document.getElementById('footerAdjustValue');
+            if (valueEl) {
+                valueEl.textContent = `${debugFooterExtraPx}px`;
+            }
+        }
+
+        function loadFooterPaddingSetting() {
+            try {
+                const saved = parseInt(localStorage.getItem(FOOTER_OFFSET_STORAGE_KEY) || '', 10);
+                if (!isNaN(saved)) {
+                    debugFooterExtraPx = Math.min(220, Math.max(0, saved));
+                }
+            } catch (e) {
+                // Ignore storage access errors.
+            }
+            applyFooterPadding();
+        }
+
+        function adjustFooterPadding(deltaPx) {
+            debugFooterExtraPx = Math.min(220, Math.max(0, debugFooterExtraPx + deltaPx));
+            try {
+                localStorage.setItem(FOOTER_OFFSET_STORAGE_KEY, String(debugFooterExtraPx));
+            } catch (e) {
+                // Ignore storage access errors.
+            }
+            applyFooterPadding();
+        }
         function initInput(deviceNum, width, height) {
             function input_data_cb(data) {
                 socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
@@ -467,6 +527,7 @@
         loadStreamConfig();
         setInterval(updateStatsTick, 1000);
         setInterval(updateDebugStatus, 500);
+        loadFooterPaddingSetting();
         updateDebugStatus();
         updateVisiblePanels();
 
