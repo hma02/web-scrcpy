@@ -101,7 +101,7 @@
             max-height: 33vh;
             overflow: auto;
             -webkit-overflow-scrolling: touch;
-            padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+            padding-bottom: calc(55px + env(safe-area-inset-bottom, 0px));
         }
 
         @media (orientation: portrait) {
@@ -150,7 +150,7 @@
                 <span>Footer offset</span>
                 <button class="control-btn" onclick="adjustFooterPadding(-10)">−</button>
                 <button class="control-btn" onclick="adjustFooterPadding(10)">+</button>
-                <span id="footerAdjustValue" class="footer-adjust-value">18px</span>
+                <span id="footerAdjustValue" class="footer-adjust-value">55px</span>
             </div>
         </div>
     </div>
@@ -251,7 +251,7 @@
         const statsByDevice = {};
         const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown' };
         const FOOTER_OFFSET_STORAGE_KEY = 'debugFooterExtraPx';
-        let debugFooterExtraPx = 18;
+        let debugFooterExtraPx = 55;
         const screenPowerOn = { 1: false, 2: false, 3: false };
         const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
 
@@ -499,15 +499,16 @@
         function updateDebugStatus() {
             const socketState = socket.connected ? 'connected' : 'disconnected';
             const selected = getSelectedDeviceNums().join(',') || 'none';
+            const activeDeviceNum = getSelectedDeviceNums()[0] || null;
             const lines = [
                 `socket=${socketState} | selected=${selected} | layout=${window.innerWidth < window.innerHeight ? 'portrait' : 'landscape'} | cfg_bitrate=${streamConfig.videoBitRate}bps cfg_max_fps=${streamConfig.maxFps}`,
             ];
-            deviceNums.forEach((n) => {
-                const s = statsByDevice[n] || {};
+            if (activeDeviceNum) {
+                const s = statsByDevice[activeDeviceNum] || {};
                 lines.push(
-                    `d${n} frame_age_s=${((Date.now() - lastVideoDataAt[n]) / 1000).toFixed(1)} screen_power=${screenPowerOn[n] ? 'on' : 'off'} in_kbps=${(s.kbps || 0).toFixed(1)} in_fps=${(s.inputFps || 0).toFixed(1)} render_fps=${(s.renderedFps || 0).toFixed(1)} decoded=${s.decodedFrames || 0} dropped=${s.droppedFrames || 0}`,
+                    `d${activeDeviceNum} frame_age_s=${((Date.now() - lastVideoDataAt[activeDeviceNum]) / 1000).toFixed(1)} screen_power=${screenPowerOn[activeDeviceNum] ? 'on' : 'off'} in_kbps=${(s.kbps || 0).toFixed(1)} in_fps=${(s.inputFps || 0).toFixed(1)} render_fps=${(s.renderedFps || 0).toFixed(1)} decoded=${s.decodedFrames || 0} dropped=${s.droppedFrames || 0}`,
                 );
-            });
+            }
             document.getElementById('debugStatusMulti').textContent = lines.join('\n');
         }
 
