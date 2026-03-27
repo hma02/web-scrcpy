@@ -48,7 +48,7 @@
             top: 10px;
             z-index: 1001;
         }
-        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
         @media (orientation: landscape) {
             .main-content { transition: margin-left 0.3s ease; }
             body.sidebar-open .main-content { margin-left: var(--sidebar-width); }
@@ -77,12 +77,19 @@
         .debug-status {
             padding: 8px 10px; background: #111; border-top: 1px solid #333; color: #9ad;
             font-size: 12px; font-family: monospace; white-space: pre-wrap;
+            flex-shrink: 0;
+            min-height: 52px;
+            max-height: 33vh;
+            overflow: auto;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
         }
 
         @media (orientation: portrait) {
-            .video-container { flex-direction: column; overflow: hidden; }
+            .video-container { flex-direction: column; overflow: hidden; min-height: 0; }
             .stream-panel { display: none; width: 100%; height: 100%; aspect-ratio: auto; flex: 1 1 auto; }
             .stream-panel.active-portrait { display: flex; }
+            .debug-status { max-height: 40vh; font-size: 11px; }
         }
     </style>
     <script src="/static/js/socket.io.js"></script>
@@ -216,6 +223,8 @@
         }
 
         const muxers = {}, parsers = {}, inputs = {};
+        const statsByDevice = {};
+        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown' };
         const screenPowerOn = { 1: false, 2: false, 3: false };
         const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
         function initInput(deviceNum, width, height) {
@@ -234,6 +243,17 @@
         deviceNums.forEach((deviceNum) => {
             const device = devices[deviceNum];
             const videoElement = document.getElementById(device.videoEl);
+            statsByDevice[deviceNum] = {
+                bytesSinceTick: 0,
+                framesSinceTick: 0,
+                kbps: 0,
+                inputFps: 0,
+                renderedFps: 0,
+                renderedFrameCounter: 0,
+                decodedFrames: 0,
+                droppedFrames: 0,
+                totalFrames: 0,
+            };
             muxers[deviceNum] = new JMuxer({ node: device.videoEl, mode: 'video', flushingTime: 0, fps: 60, clearBuffer: true, onReady: () => { if (videoElement) videoElement.controls = false; } });
             parsers[deviceNum] = new VideoParser(({ type, data }) => {
                 if (type === 'nalu') muxers[deviceNum].feed({ video: data });
@@ -241,6 +261,17 @@
                 else if (type === 'screen_size') initInput(deviceNum, data['width'], data['height']);
                 else if (type === 'size_change' && inputs[deviceNum]) inputs[deviceNum].resizeScreen(data['width'], data['height']);
             });
+
+            if (videoElement && typeof videoElement.requestVideoFrameCallback === 'function') {
+                const onFrame = () => {
+                    const stats = statsByDevice[deviceNum];
+                    if (stats) {
+                        stats.renderedFrameCounter += 1;
+                    }
+                    videoElement.requestVideoFrameCallback(onFrame);
+                };
+                videoElement.requestVideoFrameCallback(onFrame);
+            }
         });
 
         function sendControl(deviceNum, action) {
@@ -345,7 +376,12 @@
         socket.on('video_data', (payload) => {
             const deviceNum = udidToDeviceNum(payload.device_udid);
             if (!deviceNum || !parsers[deviceNum]) return;
-            parsers[deviceNum].appendData(new Uint8Array(payload.data));
+            const chunk = new Uint8Array(payload.data);
+            parsers[deviceNum].appendData(chunk);
+            if (statsByDevice[deviceNum]) {
+                statsByDevice[deviceNum].bytesSinceTick += chunk.byteLength;
+                statsByDevice[deviceNum].framesSinceTick += 1;
+            }
             lastVideoDataAt[deviceNum] = Date.now();
         });
 
@@ -367,11 +403,51 @@
             emitAttention();
         });
 
+        function updateStatsTick() {
+            deviceNums.forEach((n) => {
+                const stats = statsByDevice[n];
+                if (!stats) return;
+                stats.kbps = (stats.bytesSinceTick * 8) / 1000;
+                stats.inputFps = stats.framesSinceTick;
+                stats.renderedFps = stats.renderedFrameCounter;
+                stats.bytesSinceTick = 0;
+                stats.framesSinceTick = 0;
+                stats.renderedFrameCounter = 0;
+
+                const videoEl = document.getElementById(devices[n].videoEl);
+                if (videoEl && typeof videoEl.getVideoPlaybackQuality === 'function') {
+                    const q = videoEl.getVideoPlaybackQuality();
+                    stats.droppedFrames = q.droppedVideoFrames || 0;
+                    stats.totalFrames = q.totalVideoFrames || 0;
+                    stats.decodedFrames = Math.max(0, stats.totalFrames - stats.droppedFrames);
+                }
+            });
+        }
+
+        async function loadStreamConfig() {
+            try {
+                const response = await fetch('/api/stream_config', { cache: 'no-store' });
+                if (!response.ok) return;
+                const data = await response.json();
+                streamConfig.videoBitRate = data.video_bit_rate ?? streamConfig.videoBitRate;
+                streamConfig.maxFps = data.max_fps ?? streamConfig.maxFps;
+            } catch (e) {
+                // Keep unknown values in diagnostics footer.
+            }
+        }
+
         function updateDebugStatus() {
             const socketState = socket.connected ? 'connected' : 'disconnected';
             const selected = getSelectedDeviceNums().join(',') || 'none';
-            const lines = [`socket=${socketState} | selected=${selected} | layout=${window.innerWidth < window.innerHeight ? 'portrait' : 'landscape'}`];
-            deviceNums.forEach((n) => lines.push(`d${n} frame_age_s=${((Date.now() - lastVideoDataAt[n]) / 1000).toFixed(1)} screen_power=${screenPowerOn[n] ? 'on' : 'off'}`));
+            const lines = [
+                `socket=${socketState} | selected=${selected} | layout=${window.innerWidth < window.innerHeight ? 'portrait' : 'landscape'} | cfg_bitrate=${streamConfig.videoBitRate}bps cfg_max_fps=${streamConfig.maxFps}`,
+            ];
+            deviceNums.forEach((n) => {
+                const s = statsByDevice[n] || {};
+                lines.push(
+                    `d${n} frame_age_s=${((Date.now() - lastVideoDataAt[n]) / 1000).toFixed(1)} screen_power=${screenPowerOn[n] ? 'on' : 'off'} in_kbps=${(s.kbps || 0).toFixed(1)} in_fps=${(s.inputFps || 0).toFixed(1)} render_fps=${(s.renderedFps || 0).toFixed(1)} decoded=${s.decodedFrames || 0} dropped=${s.droppedFrames || 0}`,
+                );
+            });
             document.getElementById('debugStatusMulti').textContent = lines.join('\n');
         }
 
@@ -388,6 +464,8 @@
             socket.disconnect();
         });
 
+        loadStreamConfig();
+        setInterval(updateStatsTick, 1000);
         setInterval(updateDebugStatus, 500);
         updateDebugStatus();
         updateVisiblePanels();
