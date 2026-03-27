@@ -47,8 +47,8 @@ device_latest_sps_packet = {}
 device_latest_pps_packet = {}
 client_attention = {}
 
-video_bit_rate = "256000"
-max_fps = 10
+video_bit_rate = "800000"
+max_fps = 30
 memorized_pin = ""
 server_start_time = time.time()
 device_first_seen = {}
@@ -278,6 +278,15 @@ def pin_memory():
     memorized_pin = ''.join(ch for ch in pin if ch.isdigit())
     return jsonify({'pin': memorized_pin})
 
+
+@app.route('/api/stream_config')
+def get_stream_config():
+    """Expose active stream configuration for client-side diagnostics."""
+    return jsonify({
+        'video_bit_rate': str(video_bit_rate),
+        'max_fps': int(max_fps),
+    })
+
 def video_send_task(client_sid, device_udid):
     """Send video data for a specific device to a specific client"""
     while client_sid in client_queues and device_udid in client_queues[client_sid]:
@@ -467,8 +476,8 @@ def handle_viewer_attention(data):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Web server for scrcpy')
-    parser.add_argument('--video_bit_rate', default="512000", help='scrcpy video bit rate')
-    parser.add_argument('--max_fps', type=int, default=10, help='scrcpy max FPS')
+    parser.add_argument('--video_bit_rate', default="800000", help='scrcpy video bit rate')
+    parser.add_argument('--max_fps', type=int, default=30, help='scrcpy max FPS')
     parser.add_argument('--port', type=int, default=5011, help='port to bind the web server to')
     args = parser.parse_args()
     video_bit_rate = args.video_bit_rate
