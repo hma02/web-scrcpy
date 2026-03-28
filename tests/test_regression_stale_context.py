@@ -35,6 +35,9 @@ class DummyScrcpy:
         if self.control_fail:
             raise BrokenPipeError("simulated broken pipe")
 
+    def is_healthy(self):
+        return self.running and not self.control_fail
+
 
 def reset_state():
     app_module.client_queues.clear()
@@ -52,8 +55,8 @@ def reset_state():
     app_module.device_locks.clear()
 
 
-def test_receive_video_data_eof_does_not_flip_running_flag():
-    """Documents stale-running state when video socket hits EOF."""
+def test_receive_video_data_eof_marks_running_false():
+    """EOF should mark context unhealthy so reconnect can restart fresh."""
     s = Scrcpy(device_udid="d1")
     s.running = True
     s.stop = False
@@ -62,12 +65,11 @@ def test_receive_video_data_eof_does_not_flip_running_flag():
 
     s.receive_video_data()
 
-    # Current behavior: loop exits but running remains True.
-    assert s.running is True
+    assert s.running is False
 
 
-def test_start_device_reuses_context_after_control_broken_pipe(monkeypatch):
-    """Documents no automatic restart after control socket starts failing."""
+def test_start_device_restarts_context_after_control_broken_pipe(monkeypatch):
+    """Control broken-pipe should force recovery and fresh start."""
     reset_state()
     DummyScrcpy.starts = 0
     monkeypatch.setattr(app_module, "Scrcpy", DummyScrcpy)
@@ -85,8 +87,11 @@ def test_start_device_reuses_context_after_control_broken_pipe(monkeypatch):
     # Simulate the server-side "Broken pipe" path seen in production logs.
     client.emit("control_data", {"device_udid": device_udid, "data": b"x"})
 
-    # A later start request from same client keeps reusing stale running=True ctx.
+    # Recovery should restart immediately when control send fails.
+    assert DummyScrcpy.starts == 2
+
+    # A later start request should reuse healthy restarted context.
     client.emit("start_device", {"device_udid": device_udid})
-    assert DummyScrcpy.starts == 1
+    assert DummyScrcpy.starts == 2
 
     client.disconnect()
