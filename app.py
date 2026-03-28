@@ -46,6 +46,7 @@ device_recent_packets = {}
 device_latest_sps_packet = {}
 device_latest_pps_packet = {}
 client_attention = {}
+stream_sender_tasks = {}
 
 video_bit_rate = "800000"
 max_fps = 30
@@ -70,6 +71,12 @@ def get_device_lock(device_udid):
 
 def attach_client_to_device(client_sid, device_udid, queue_obj):
     with state_lock:
+        old_queue = client_queues.get(client_sid, {}).get(device_udid)
+        if old_queue is not None:
+            try:
+                device_video_queues.get(device_udid, []).remove(old_queue)
+            except ValueError:
+                pass
         client_queues.setdefault(client_sid, {})[device_udid] = queue_obj
         device_video_queues.setdefault(device_udid, []).append(queue_obj)
         watchers = device_watchers.setdefault(device_udid, [])
@@ -289,9 +296,14 @@ def get_stream_config():
 
 def video_send_task(client_sid, device_udid):
     """Send video data for a specific device to a specific client"""
-    while client_sid in client_queues and device_udid in client_queues[client_sid]:
+    with state_lock:
+        queue_obj = client_queues.get(client_sid, {}).get(device_udid)
+    while True:
+        with state_lock:
+            still_bound = client_queues.get(client_sid, {}).get(device_udid) is queue_obj
+        if not still_bound:
+            break
         try:
-            queue_obj = client_queues[client_sid][device_udid]
             message = queue_obj.get(timeout=0.01)
             socketio.emit('video_data', {
                 'device_udid': device_udid,
@@ -303,7 +315,76 @@ def video_send_task(client_sid, device_udid):
             print(f"Error sending data: {e}")
         finally:
             socketio.sleep(0.001)
+    with state_lock:
+        stream_sender_tasks.pop((client_sid, device_udid), None)
     print(f"video_send_task stopped for device {device_udid}")
+
+
+def _is_ctx_unhealthy_locked(ctx):
+    if ctx is None:
+        return True
+    if not getattr(ctx, "running", False):
+        return True
+    if getattr(ctx, "stop", False):
+        return True
+    if getattr(ctx, "video_socket", None) is None:
+        return True
+    if getattr(ctx, "control_socket", None) is None:
+        return True
+    video_thread = getattr(ctx, "video_thread", None)
+    control_thread = getattr(ctx, "control_thread", None)
+    if video_thread is not None and not video_thread.is_alive():
+        return True
+    if control_thread is not None and not control_thread.is_alive():
+        return True
+    return False
+
+
+def _restart_ctx_locked(device_udid, reason):
+    old_ctx = device_contexts.get(device_udid)
+    if old_ctx is not None:
+        try:
+            old_ctx.scrcpy_stop()
+        except Exception as exc:
+            print(f"Error stopping unhealthy context for {device_udid}: {exc}")
+    device_contexts.pop(device_udid, None)
+    clear_stream_cache_locked(device_udid)
+    print(f"Restarting scrcpy for {device_udid} due to: {reason}")
+
+    scpy_ctx = Scrcpy(device_udid=device_udid)
+    scpy_ctx.scrcpy_start(
+        lambda data: send_video_data(device_udid, data),
+        video_bit_rate,
+        max_fps,
+        lambda message: send_device_message(device_udid, message),
+        device_udid=device_udid
+    )
+    device_contexts[device_udid] = scpy_ctx
+    return scpy_ctx
+
+
+def _ensure_healthy_ctx(device_udid, restart_reason):
+    lock = get_device_lock(device_udid)
+    with lock:
+        with state_lock:
+            ctx = device_contexts.get(device_udid)
+            unhealthy = _is_ctx_unhealthy_locked(ctx)
+        if unhealthy:
+            with state_lock:
+                _restart_ctx_locked(device_udid, restart_reason)
+
+
+def background_health_monitor():
+    while True:
+        try:
+            with state_lock:
+                tracked_devices = list(device_watchers.keys())
+            for device_udid in tracked_devices:
+                _ensure_healthy_ctx(device_udid, "periodic health check")
+        except Exception as exc:
+            print(f"health monitor loop error: {exc}")
+        finally:
+            socketio.sleep(2.0)
 
 def send_video_data(device_udid, data):
     """Queue video data for all clients watching this device"""
@@ -378,38 +459,25 @@ def handle_start_device(data):
     try:
         lock = get_device_lock(device_udid)
         with lock:
-            existing_ctx = device_contexts.get(device_udid)
-            needs_start = existing_ctx is None or not existing_ctx.running
+            with state_lock:
+                existing_ctx = device_contexts.get(device_udid)
+                needs_start = _is_ctx_unhealthy_locked(existing_ctx)
             if needs_start:
-                if existing_ctx is not None:
-                    try:
-                        existing_ctx.scrcpy_stop()
-                    except Exception:
-                        pass
-                    with state_lock:
-                        device_contexts.pop(device_udid, None)
-
-                # Create fresh instance
-                scpy_ctx = Scrcpy(device_udid=device_udid)
-                scpy_ctx.scrcpy_start(
-                    lambda data: send_video_data(device_udid, data),
-                    video_bit_rate,
-                    max_fps,
-                    lambda message: send_device_message(device_udid, message),
-                    device_udid=device_udid
-                )
                 with state_lock:
-                    device_contexts[device_udid] = scpy_ctx
-                    device_video_queues.setdefault(device_udid, [])
-                    device_watchers.setdefault(device_udid, [])
-                    clear_stream_cache_locked(device_udid)
+                    _restart_ctx_locked(device_udid, "start_device requested unhealthy/absent context")
+            with state_lock:
+                device_video_queues.setdefault(device_udid, [])
+                device_watchers.setdefault(device_udid, [])
 
             # Create queue for this client-device pair
             q = queue.Queue()
             attach_client_to_device(client_sid, device_udid, q)
 
             # Start video send task
-            socketio.start_background_task(video_send_task, client_sid, device_udid)
+            with state_lock:
+                if (client_sid, device_udid) not in stream_sender_tasks:
+                    stream_sender_tasks[(client_sid, device_udid)] = True
+                    socketio.start_background_task(video_send_task, client_sid, device_udid)
         
         emit('device_started', {'device_udid': device_udid})
         print(f"Device {device_udid} started for client {client_sid}")
@@ -451,6 +519,7 @@ def handle_control_data(data):
             ctx.scrcpy_send_control(control_data)
         except Exception as e:
             print(f"Error sending control data to {device_udid}: {e}")
+            _ensure_healthy_ctx(device_udid, f"control channel error: {e}")
     else:
         print(f"Device {device_udid} not found in contexts")
 
@@ -482,4 +551,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
     video_bit_rate = args.video_bit_rate
     max_fps = args.max_fps
+    socketio.start_background_task(background_health_monitor)
     socketio.run(app, host='0.0.0.0', port=args.port)

@@ -24,6 +24,7 @@ def reset_state():
     app_module.device_latest_sps_packet.clear()
     app_module.device_latest_pps_packet.clear()
     app_module.client_attention.clear()
+    app_module.stream_sender_tasks.clear()
     app_module.device_locks.clear()
 
 
@@ -105,3 +106,33 @@ def test_attention_switches_live_stream_target():
     app_module.recompute_stream_target_and_owner_locked(device)
     assert app_module.device_stream_target[device] == "ubuntu"
     assert app_module.device_control_owner[device] == "ubuntu"
+
+
+def test_reattach_same_client_device_replaces_old_queue():
+    reset_state()
+    device = "d5"
+    app_module.device_stream_headers[device] = b"h" * app_module.STREAM_HEADER_BYTES
+
+    q1 = queue.Queue()
+    q2 = queue.Queue()
+    app_module.attach_client_to_device("c1", device, q1)
+    app_module.attach_client_to_device("c1", device, q2)
+
+    assert app_module.client_queues["c1"][device] is q2
+    assert app_module.device_video_queues[device] == [q2]
+
+
+def test_ctx_health_check_detects_dead_video_thread():
+    class DeadThread:
+        def is_alive(self):
+            return False
+
+    class FakeCtx:
+        running = True
+        stop = False
+        video_socket = object()
+        control_socket = object()
+        video_thread = DeadThread()
+        control_thread = None
+
+    assert app_module._is_ctx_unhealthy_locked(FakeCtx()) is True
