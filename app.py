@@ -68,6 +68,83 @@ def get_device_lock(device_udid):
         return lock
 
 
+def is_ctx_healthy(ctx):
+    """Best-effort context health check with backward compatibility."""
+    if ctx is None:
+        return False
+    checker = getattr(ctx, "is_healthy", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception as exc:
+            print(f"Context health check failed: {exc}")
+            return False
+    return bool(getattr(ctx, "running", False))
+
+
+def restart_device_context_locked(device_udid, force_start=False):
+    """
+    Restart one device context under per-device lock when watchers are present.
+    Caller must already hold the per-device lock.
+    """
+    existing_ctx = device_contexts.get(device_udid)
+    if existing_ctx is not None:
+        try:
+            existing_ctx.scrcpy_stop()
+        except Exception as exc:
+            print(f"scrcpy_stop failed during restart for {device_udid}: {exc}")
+        with state_lock:
+            device_contexts.pop(device_udid, None)
+
+    with state_lock:
+        watcher_count = len(device_video_queues.get(device_udid, []))
+        if watcher_count <= 0 and not force_start:
+            clear_stream_cache_locked(device_udid)
+            return False
+
+    scpy_ctx = Scrcpy(device_udid=device_udid)
+    scpy_ctx.scrcpy_start(
+        lambda data: send_video_data(device_udid, data),
+        video_bit_rate,
+        max_fps,
+        lambda message: send_device_message(device_udid, message),
+        device_udid=device_udid
+    )
+    with state_lock:
+        device_contexts[device_udid] = scpy_ctx
+        device_video_queues.setdefault(device_udid, [])
+        device_watchers.setdefault(device_udid, [])
+        clear_stream_cache_locked(device_udid)
+    return True
+
+
+def recover_unhealthy_device_context(device_udid, reason):
+    """If context is unhealthy, stop it and restart fresh when viewers still exist."""
+    lock = get_device_lock(device_udid)
+    with lock:
+        with state_lock:
+            ctx = device_contexts.get(device_udid)
+            healthy = is_ctx_healthy(ctx)
+        if healthy:
+            return False
+
+        print(f"Recovering device {device_udid} due to unhealthy context: {reason}")
+        try:
+            return restart_device_context_locked(device_udid)
+        except Exception as exc:
+            print(f"Failed recovering {device_udid}: {exc}")
+            with state_lock:
+                bad_ctx = device_contexts.get(device_udid)
+            if bad_ctx is not None:
+                try:
+                    bad_ctx.scrcpy_stop()
+                except Exception:
+                    pass
+                with state_lock:
+                    device_contexts.pop(device_udid, None)
+            return False
+
+
 def attach_client_to_device(client_sid, device_udid, queue_obj):
     with state_lock:
         client_queues.setdefault(client_sid, {})[device_udid] = queue_obj
@@ -336,6 +413,21 @@ def send_device_message(device_udid, message):
             'message': message
         }, to=client_sid)
 
+
+def device_context_health_task():
+    """Periodic health monitor for running scrcpy contexts."""
+    while True:
+        with state_lock:
+            device_ids = list(device_contexts.keys())
+        for device_udid in device_ids:
+            with state_lock:
+                ctx = device_contexts.get(device_udid)
+            if ctx is None:
+                continue
+            if not is_ctx_healthy(ctx):
+                recover_unhealthy_device_context(device_udid, "periodic health check")
+        socketio.sleep(1.0)
+
 @socketio.on('connect')
 def handle_connect():
     client_sid = request.sid
@@ -379,30 +471,9 @@ def handle_start_device(data):
         lock = get_device_lock(device_udid)
         with lock:
             existing_ctx = device_contexts.get(device_udid)
-            needs_start = existing_ctx is None or not existing_ctx.running
+            needs_start = existing_ctx is None or not is_ctx_healthy(existing_ctx)
             if needs_start:
-                if existing_ctx is not None:
-                    try:
-                        existing_ctx.scrcpy_stop()
-                    except Exception:
-                        pass
-                    with state_lock:
-                        device_contexts.pop(device_udid, None)
-
-                # Create fresh instance
-                scpy_ctx = Scrcpy(device_udid=device_udid)
-                scpy_ctx.scrcpy_start(
-                    lambda data: send_video_data(device_udid, data),
-                    video_bit_rate,
-                    max_fps,
-                    lambda message: send_device_message(device_udid, message),
-                    device_udid=device_udid
-                )
-                with state_lock:
-                    device_contexts[device_udid] = scpy_ctx
-                    device_video_queues.setdefault(device_udid, [])
-                    device_watchers.setdefault(device_udid, [])
-                    clear_stream_cache_locked(device_udid)
+                restart_device_context_locked(device_udid, force_start=True)
 
             # Create queue for this client-device pair
             q = queue.Queue()
@@ -451,6 +522,7 @@ def handle_control_data(data):
             ctx.scrcpy_send_control(control_data)
         except Exception as e:
             print(f"Error sending control data to {device_udid}: {e}")
+            recover_unhealthy_device_context(device_udid, "control send failure")
     else:
         print(f"Device {device_udid} not found in contexts")
 
@@ -473,6 +545,9 @@ def handle_viewer_attention(data):
         with lock:
             with state_lock:
                 recompute_stream_target_and_owner_locked(device_udid)
+
+
+socketio.start_background_task(device_context_health_task)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Web server for scrcpy')

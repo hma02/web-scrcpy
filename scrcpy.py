@@ -30,6 +30,7 @@ class Scrcpy:
         self.running = False  # Flag to track if this instance is actively streaming
         self.device_message_callback = None
         self.control_recv_buffer = bytearray()
+        self.health_thread = None
 
     def list_devices(self):
         """Populate self.devices and assign unique local ports per device."""
@@ -142,10 +143,14 @@ class Scrcpy:
             try:
                 data = self.video_socket.recv(20480)
                 if not data:
+                    if not self.stop:
+                        self.running = False
                     break
                 self.video_callback(data)
             except Exception as e:
                 print(f"Video recv error: {e}")
+                if not self.stop:
+                    self.running = False
                 break
         print("Video data reception stopped")
 
@@ -166,11 +171,15 @@ class Scrcpy:
                 self.audio_socket.settimeout(1.0)
                 data = self.audio_socket.recv(1024)
                 if not data:
+                    if not self.stop:
+                        self.running = False
                     break
             except socket.timeout:
                 continue
             except Exception as e:
                 print(f"Audio recv error: {e}")
+                if not self.stop:
+                    self.running = False
                 break
         print("Audio data reception stopped")
 
@@ -183,6 +192,8 @@ class Scrcpy:
                 self.control_socket.settimeout(1.0)
                 data = self.control_socket.recv(1024)
                 if not data:
+                    if not self.stop:
+                        self.running = False
                     break
                 if data:
                     self._process_device_message(data)
@@ -191,8 +202,18 @@ class Scrcpy:
                 continue
             except Exception as e:
                 print(f"Control recv error: {e}")
+                if not self.stop:
+                    self.running = False
                 break
         print("Control connection stopped")
+
+    def _health_watchdog(self):
+        """Periodically downgrade running flag when stream threads/sockets are unhealthy."""
+        while not self.stop:
+            if self.running and not self.is_healthy():
+                print(f"[{self.selected_device}] Health watchdog marked session unhealthy")
+                self.running = False
+            time.sleep(1.0)
 
     def _process_device_message(self, data):
         self.control_recv_buffer.extend(data)
@@ -335,6 +356,8 @@ class Scrcpy:
             self.video_thread.start()
             self.audio_thread.start()
             self.control_thread.start()
+            self.health_thread = Thread(target=self._health_watchdog, daemon=True)
+            self.health_thread.start()
             print("Background tasks started")
             self.running = True  # Mark instance as successfully running
         except Exception as e:
@@ -412,8 +435,31 @@ class Scrcpy:
                 self.android_thread.join(timeout=2)
         except Exception as e:
             print(f"Android thread join error: {e}")
+
+        try:
+            if self.health_thread and self.health_thread.is_alive():
+                self.health_thread.join(timeout=2)
+        except Exception as e:
+            print(f"Health thread join error: {e}")
         
         print("Scrcpy stopped")
 
     def scrcpy_send_control(self, data):
-        self.control_socket.send(data)
+        try:
+            self.control_socket.send(data)
+        except Exception:
+            self.running = False
+            raise
+
+    def is_healthy(self):
+        if self.stop or not self.running:
+            return False
+        if self.video_socket is None or self.control_socket is None:
+            return False
+        if self.video_thread is None or not self.video_thread.is_alive():
+            return False
+        if self.control_thread is None or not self.control_thread.is_alive():
+            return False
+        if self.android_thread is None or not self.android_thread.is_alive():
+            return False
+        return True
