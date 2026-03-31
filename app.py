@@ -6,6 +6,7 @@ import argparse
 import queue
 import time
 import threading
+import subprocess
 from urllib.parse import quote
 from collections import deque
 # Force inclusion of simple_websocket for threading async_mode in bundled binary
@@ -363,6 +364,58 @@ def get_stream_config():
         'video_bit_rate': str(video_bit_rate),
         'max_fps': int(max_fps),
     })
+
+
+def run_cmd(cmd):
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout.strip())
+    if result.stderr:
+        print(result.stderr.strip())
+    result.check_returncode()
+
+
+@app.route('/api/restart_adb_server', methods=['POST'])
+def restart_adb_server():
+    payload = request.get_json(silent=True) or {}
+    selected_devices = payload.get('devices', [])
+    if not isinstance(selected_devices, list):
+        return jsonify({'error': 'devices must be a list'}), 400
+
+    selected_devices = [str(device).strip() for device in selected_devices if str(device).strip()]
+
+    reconnect_results = []
+    base = ["adb"]
+    try:
+        run_cmd(base + ["kill-server"])
+        run_cmd(base + ["start-server"])
+
+        for device in selected_devices:
+            if ":" not in device:
+                reconnect_results.append({
+                    "device": device,
+                    "status": "skipped",
+                    "reason": "non-network device id"
+                })
+                continue
+            run_cmd(base + ["connect", device])
+            run_cmd(base + ["disconnect", device])
+            run_cmd(base + ["connect", device])
+            reconnect_results.append({
+                "device": device,
+                "status": "reconnected"
+            })
+
+        return jsonify({
+            "ok": True,
+            "devices": reconnect_results
+        })
+    except subprocess.CalledProcessError as exc:
+        return jsonify({
+            "ok": False,
+            "error": f"adb command failed: {exc}",
+            "devices": reconnect_results
+        }), 500
 
 def video_send_task(client_sid, device_udid):
     """Send video data for a specific device to a specific client"""
