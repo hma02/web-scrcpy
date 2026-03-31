@@ -31,6 +31,7 @@ class Scrcpy:
         self.device_message_callback = None
         self.control_recv_buffer = bytearray()
         self.health_thread = None
+        self._first_video_chunk_logged = False
 
     def list_devices(self):
         """Populate self.devices and assign unique local ports per device."""
@@ -111,7 +112,8 @@ class Scrcpy:
         cmd = [
             ADB_PATH, "-s", device, "shell",
             f"CLASSPATH={DEVICE_SERVER_PATH} app_process / com.genymobile.scrcpy.Server 3.1 "
-            f"tunnel_forward=true log_level=VERBOSE video_bit_rate=" + self.video_bit_rate + " max_fps=" + str(self.max_fps)
+            f"tunnel_forward=true log_level=VERBOSE audio=false video=true control=true "
+            f"video_bit_rate=" + self.video_bit_rate + " max_fps=" + str(self.max_fps)
         ]
         self.android_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -146,6 +148,15 @@ class Scrcpy:
                     if not self.stop:
                         self.running = False
                     break
+                if not self._first_video_chunk_logged:
+                    self._first_video_chunk_logged = True
+                    head = data[:24]
+                    head_hex = " ".join(f"{b:02x}" for b in head)
+                    head_ascii = "".join(chr(b) if 32 <= b <= 126 else "." for b in head)
+                    print(f"[{self.selected_device}] First video chunk head hex: {head_hex}")
+                    print(f"[{self.selected_device}] First video chunk head ascii: {head_ascii}")
+                    if b"OpusHead" in data[:128]:
+                        print(f"[{self.selected_device}] WARNING: video socket appears to carry Opus audio bytes")
                 self.video_callback(data)
             except Exception as e:
                 print(f"Video recv error: {e}")
@@ -313,6 +324,7 @@ class Scrcpy:
         self.video_callback = video_callback
         self.device_message_callback = device_message_callback
         self.control_recv_buffer = bytearray()
+        self._first_video_chunk_logged = False
         self.stop = False
 
         result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True)
@@ -344,17 +356,12 @@ class Scrcpy:
             # video connection with retry
             self.video_socket = self._connect_with_retry("Video", max_retries=30, retry_delay=0.5)
 
-            # audio connection with retry
-            self.audio_socket = self._connect_with_retry("Audio", max_retries=30, retry_delay=0.5)
-
             # control connection with retry
             self.control_socket = self._connect_with_retry("Control", max_retries=30, retry_delay=0.5)
 
             self.video_thread = Thread(target=self.receive_video_data, daemon=True)
-            self.audio_thread = Thread(target=self.receive_audio_data, daemon=True)
             self.control_thread = Thread(target=self.handle_control_conn, daemon=True)
             self.video_thread.start()
-            self.audio_thread.start()
             self.control_thread.start()
             self.health_thread = Thread(target=self._health_watchdog, daemon=True)
             self.health_thread.start()

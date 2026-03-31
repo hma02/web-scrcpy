@@ -354,13 +354,46 @@
                 decodedFrames: 0,
                 droppedFrames: 0,
                 totalFrames: 0,
+                parserName: 'n/a',
+                parserHeaderAttempts: 0,
+                parserStreamId: null,
+                parserRawWidth: null,
+                parserRawHeight: null,
+                parserAppliedWidth: null,
+                parserAppliedHeight: null,
+                parserHeaderHex: '',
+                parserNameHex: '',
+                parserStage: 'init',
+                parserLikelyMidstreamCorruption: false,
             };
             muxers[deviceNum] = new JMuxer({ node: device.videoEl, mode: 'video', flushingTime: 0, fps: 60, clearBuffer: true, onReady: () => { if (videoElement) videoElement.controls = false; } });
             parsers[deviceNum] = new VideoParser(({ type, data }) => {
                 if (type === 'nalu') muxers[deviceNum].feed({ video: data });
                 else if (type === 'init') { muxers[deviceNum].feed({ video: data['sps'] }); muxers[deviceNum].feed({ video: data['pps'] }); }
-                else if (type === 'screen_size') initInput(deviceNum, data['width'], data['height']);
+                else if (type === 'screen_size') {
+                    if (statsByDevice[deviceNum]) {
+                        statsByDevice[deviceNum].parserAppliedWidth = data['width'];
+                        statsByDevice[deviceNum].parserAppliedHeight = data['height'];
+                    }
+                    initInput(deviceNum, data['width'], data['height']);
+                }
                 else if (type === 'size_change' && inputs[deviceNum]) inputs[deviceNum].resizeScreen(data['width'], data['height']);
+            }, false, (debugPayload) => {
+                const stats = statsByDevice[deviceNum];
+                if (!stats || !debugPayload) return;
+                stats.parserStage = debugPayload.stage || stats.parserStage;
+                stats.parserHeaderAttempts = debugPayload.headerParseAttempts ?? stats.parserHeaderAttempts;
+                stats.parserName = (debugPayload.namePrintablePreview || debugPayload.name || stats.parserName || '').replace(/\0/g, '');
+                stats.parserStreamId = debugPayload.streamId ?? stats.parserStreamId;
+                stats.parserRawWidth = debugPayload.parsedWidth ?? stats.parserRawWidth;
+                stats.parserRawHeight = debugPayload.parsedHeight ?? stats.parserRawHeight;
+                stats.parserAppliedWidth = debugPayload.width ?? stats.parserAppliedWidth;
+                stats.parserAppliedHeight = debugPayload.height ?? stats.parserAppliedHeight;
+                stats.parserHeaderHex = debugPayload.headerRawHex || stats.parserHeaderHex;
+                stats.parserNameHex = debugPayload.nameRawHex || stats.parserNameHex;
+                stats.parserLikelyMidstreamCorruption = Boolean(
+                    debugPayload.likelyMidstreamCorruption || stats.parserLikelyMidstreamCorruption
+                );
             });
 
             if (videoElement && typeof videoElement.requestVideoFrameCallback === 'function') {
@@ -558,6 +591,18 @@
                 lines.push(
                     `d${activeDeviceNum} frame_age_s=${((Date.now() - lastVideoDataAt[activeDeviceNum]) / 1000).toFixed(1)} in_kbps=${(s.kbps || 0).toFixed(1)} in_fps=${(s.inputFps || 0).toFixed(1)} render_fps=${(s.renderedFps || 0).toFixed(1)} decoded=${s.decodedFrames || 0} dropped=${s.droppedFrames || 0}`,
                 );
+                lines.push(
+                    `d${activeDeviceNum} parser stage=${s.parserStage || 'n/a'} attempts=${s.parserHeaderAttempts || 0} stream_id=${s.parserStreamId ?? 'n/a'} raw_w=${s.parserRawWidth ?? 'n/a'} raw_h=${s.parserRawHeight ?? 'n/a'} applied_w=${s.parserAppliedWidth ?? 'n/a'} applied_h=${s.parserAppliedHeight ?? 'n/a'}`
+                );
+                lines.push(
+                    `d${activeDeviceNum} parser name=${s.parserName || 'n/a'} midstream_corruption=${s.parserLikelyMidstreamCorruption ? 'yes' : 'no'}`
+                );
+                if (s.parserNameHex) {
+                    lines.push(`d${activeDeviceNum} parser name_hex=${s.parserNameHex}`);
+                }
+                if (s.parserHeaderHex) {
+                    lines.push(`d${activeDeviceNum} parser dims_hex=${s.parserHeaderHex}`);
+                }
             }
             document.getElementById('debugStatusMulti').textContent = lines.join('\n');
         }
