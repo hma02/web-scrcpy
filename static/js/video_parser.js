@@ -1,5 +1,5 @@
 class VideoParser {
-    constructor(onNaluCallback, debug = false) {
+    constructor(onNaluCallback, debug = false, onDebugCallback = null) {
         this.debug = debug
         this.buffer = new Uint8Array(0);
         this.name = null;
@@ -10,7 +10,32 @@ class VideoParser {
         this.pps = null;
         this.mimeCodec = null;
         this.onNaluCallback = onNaluCallback;
+        this.onDebugCallback = onDebugCallback;
         this.hasSentSpsPps = false;
+        this.headerParseAttempts = 0;
+        this.lastHeaderDebug = null;
+    }
+
+    _hexSample(bytes, maxLen = 16) {
+        if (!bytes || bytes.length === 0) return '';
+        return Array.from(bytes.slice(0, maxLen)).map((b) => b.toString(16).padStart(2, '0')).join(' ');
+    }
+
+    _printHeaderDebug(stage, details = {}) {
+        const payload = {
+            stage,
+            name: this.name,
+            width: this.width,
+            height: this.height,
+            bufferLength: this.buffer.length,
+            headerParseAttempts: this.headerParseAttempts,
+            ...details,
+        };
+        this.lastHeaderDebug = payload;
+        console.log('[VideoParser Debug]', payload);
+        if (this.onDebugCallback) {
+            this.onDebugCallback(payload);
+        }
     }
 
     appendData(data) {
@@ -31,6 +56,11 @@ class VideoParser {
             if (this.buffer.length >= 64) {
                 const name = this.buffer.slice(0, 64);
                 this.name = new TextDecoder().decode(name);
+                this.headerParseAttempts += 1;
+                this._printHeaderDebug('name_parsed', {
+                    nameRawHex: this._hexSample(name, 24),
+                    namePrintablePreview: this.name.replace(/\0/g, ''),
+                });
                 console.log("Device name:" + this.name);
                 if (this.onNaluCallback) {
                     this.onNaluCallback({
@@ -38,25 +68,69 @@ class VideoParser {
                         data: { "name": this.name }
                     });
                 }
-                startIndex = 64;
+                // Immediately slice buffer to remove device name bytes
+                this.buffer = this.buffer.slice(64);
+                // Recursively call to process width/height immediately
+                this.scrcpyProcessBuffer();
+                return;
             }
         } else if (this.width == null) {
             if (this.buffer.length >= 12) {
-                const id = new DataView(this.buffer.buffer).getInt32(0, false);
-                this.width = new DataView(this.buffer.buffer).getInt32(4, false);
-                this.height = new DataView(this.buffer.buffer).getInt32(8, false);
-                console.log("width:" + this.width + " height:" + this.height);
-                if (this.onNaluCallback) {
-                    this.onNaluCallback({
-                        type: 'screen_size',
-                        data: { "width": this.width, "height": this.height }
+                try {
+                    const id = new DataView(this.buffer.buffer, this.buffer.byteOffset).getInt32(0, false);
+                    this.width = new DataView(this.buffer.buffer, this.buffer.byteOffset).getInt32(4, false);
+                    this.height = new DataView(this.buffer.buffer, this.buffer.byteOffset).getInt32(8, false);
+                    this._printHeaderDebug('raw_dimensions_parsed', {
+                        headerRawHex: this._hexSample(this.buffer.slice(0, 12), 12),
+                        streamId: id,
+                        parsedWidth: this.width,
+                        parsedHeight: this.height,
                     });
+                    
+                    // Validate dimensions - if insane values, use fallback
+                    if (this.width > 5000 || this.height > 5000 || this.width < 100 || this.height < 100) {
+                        console.warn("Invalid dimensions detected:", this.width, this.height, "- using fallback 720x1400");
+                        this._printHeaderDebug('dimensions_invalid_fallback', {
+                            invalidWidth: this.width,
+                            invalidHeight: this.height,
+                            fallbackWidth: 720,
+                            fallbackHeight: 1400,
+                            likelyMidstreamCorruption: true,
+                        });
+                        this.width = 720;
+                        this.height = 1400;
+                    }
+                    
+                    console.log("width:" + this.width + " height:" + this.height);
+                    if (this.onNaluCallback) {
+                        this.onNaluCallback({
+                            type: 'screen_size',
+                            data: { "width": this.width, "height": this.height }
+                        });
+                    }
+                    startIndex = 12;
+                    // Immediately slice buffer to remove width/height bytes
+                    this.buffer = this.buffer.slice(startIndex);
+                    // Recursively call to process video frames immediately
+                    this.scrcpyProcessBuffer();
+                    return;
+                } catch (e) {
+                    console.error("Error parsing width/height:", e);
+                    this._printHeaderDebug('dimensions_parse_error', {
+                        error: String(e),
+                        headerRawHex: this._hexSample(this.buffer.slice(0, 12), 12),
+                    });
+                    // Use fallback dimensions
+                    this.width = 720;
+                    this.height = 1400;
+                    this.buffer = this.buffer.slice(12);
+                    this.scrcpyProcessBuffer();
+                    return;
                 }
-                startIndex += 12;
             }
         } else while (this.buffer.length - startIndex > 12) {
             // const flag = new DataView(this.buffer.buffer).getInt64(0, false);
-            const size = new DataView(this.buffer.buffer).getInt32(startIndex + 8, false);
+            const size = new DataView(this.buffer.buffer, this.buffer.byteOffset).getInt32(startIndex + 8, false);
             if (this.buffer.length - startIndex >= 12 + size) {
                 const nalu = this.buffer.slice(startIndex + 12, startIndex + 12 + size);
                 this.processBuffer(nalu)

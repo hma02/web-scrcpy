@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <title>Multi Device Stream - Web Scrcpy</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --sidebar-width: 280px; }
+        body {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: Arial, sans-serif;
+        }
+        .sidebar {
+            background-color: #222;
+            border-right: 1px solid #444;
+            display: flex;
+            flex-direction: column;
+            padding: 60px 10px 10px;
+            gap: 10px;
+            transition: left 0.3s ease;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
+            position: fixed;
+            left: calc(-1 * var(--sidebar-width));
+            top: 0;
+            width: var(--sidebar-width);
+            height: 100dvh;
+            z-index: 1000;
+        }
+        .sidebar.expanded { left: 0; }
+        .sidebar-toggle {
+            width: 40px;
+            height: 40px;
+            background-color: #333;
+            border: 1px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+            color: white;
+            position: fixed;
+            left: 10px;
+            top: 10px;
+            z-index: 1001;
+        }
+        .ephemeral-banner {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(32, 32, 32, 0.92);
+            color: #d8f5d8;
+            border: 1px solid #4d8b4d;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 12px;
+            z-index: 1100;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+            max-width: min(86vw, 520px);
+            text-align: center;
+        }
+        .ephemeral-banner.visible {
+            opacity: 1;
+        }
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+        @media (orientation: landscape) {
+            .main-content { transition: margin-left 0.3s ease; }
+            body.sidebar-open .main-content { margin-left: var(--sidebar-width); }
+            body.sidebar-open .sidebar-toggle { left: calc(var(--sidebar-width) + 10px); }
+        }
+
+        .control-btn {
+            width: 100%; padding: 8px; border: 1px solid #555; background-color: #333; color: white;
+            border-radius: 4px; cursor: pointer; margin-bottom: 6px; text-align: left;
+        }
+        .control-btn:hover { background-color: #444; }
+        .footer-adjust-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            margin: 8px 0 4px;
+            color: #ccc;
+            font-size: 12px;
+        }
+        .footer-adjust-row .control-btn {
+            margin: 0;
+            text-align: center;
+            width: auto;
+            min-width: 42px;
+            flex: 0 0 auto;
+        }
+        .footer-adjust-value {
+            font-family: monospace;
+            color: #9ad;
+        }
+        .bulk-text {
+            width: 100%; min-height: 70px; background: #262626; color: #fff; border: 1px solid #555;
+            border-radius: 3px; padding: 6px; font-size: 12px;
+        }
+        .selector-box {
+            background: #2a2a2a; border: 1px solid #444; border-radius: 4px; padding: 8px; color: #ddd;
+        }
+        .selector-box label { display: block; margin: 4px 0; font-size: 12px; }
+
+        .video-container { flex: 1; display: flex; gap: 2px; overflow: hidden; flex-direction: row; }
+        .stream-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: #000; border: 1px solid #333; }
+        .stream-content { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        video { max-width: 100%; max-height: 100%; width: auto; height: auto; background: black; }
+
+        .debug-status {
+            padding: 8px 10px; background: #111; border-top: 1px solid #333; color: #9ad;
+            font-size: 12px; font-family: monospace; white-space: pre-wrap;
+            flex-shrink: 0;
+            min-height: 78px;
+            max-height: 33vh;
+            overflow: auto;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: calc(55px + env(safe-area-inset-bottom, 0px));
+        }
+
+        @media (orientation: portrait) {
+            .video-container { flex-direction: column; overflow: hidden; min-height: 0; }
+            .stream-panel { display: none; width: 100%; height: 100%; aspect-ratio: auto; flex: 1 1 auto; }
+            .stream-panel.active-portrait { display: flex; }
+            .debug-status { min-height: 84px; max-height: 45vh; font-size: 11px; }
+        }
+    </style>
+    <script src="/static/js/socket.io.js"></script>
+    <script src="/static/js/input.js"></script>
+    <script src="/static/js/exp-golomb.js"></script>
+    <script src="/static/js/h264-sps-parser.js"></script>
+    <script src="/static/js/video_parser.js"></script>
+    <script src="/static/js/jmuxer.min.js"></script>
+</head>
+<body>
+    <button class="sidebar-toggle" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i></button>
+    <div id="ephemeralBanner" class="ephemeral-banner"></div>
+
+    <div class="sidebar" id="sidebar">
+        <button class="control-btn" onclick="goBack()">← Back to Menu</button>
+
+        <div class="selector-box" id="targetSelectors">
+            <strong>Target devices</strong>
+            <label><input type="checkbox" id="selectSidebar1" checked> <span id="targetLabel1">Device 1</span></label>
+            <label><input type="checkbox" id="selectSidebar2" checked> <span id="targetLabel2">Device 2</span></label>
+            <label id="sidebarTargetRow3"><input type="checkbox" id="selectSidebar3" checked> <span id="targetLabel3">Device 3</span></label>
+        </div>
+
+        <div class="selector-box">
+            <strong>Controls (apply to selected devices)</strong>
+            <button class="control-btn" onclick="sendControlToSelected('power')">⏻ Power</button>
+            <button class="control-btn" onclick="sendControlToSelected('back')">← Back</button>
+            <button class="control-btn" onclick="sendControlToSelected('home')">⌂ Home</button>
+            <button class="control-btn" onclick="sendControlToSelected('menu')">☰ Menu</button>
+            <button class="control-btn" onclick="sendControlToSelected('vol-down')">🔉 Vol-</button>
+            <button class="control-btn" onclick="sendControlToSelected('vol-up')">🔊 Vol+</button>
+            <button class="control-btn" onclick="sendControlToSelected('confirm')">✅ Confirm (OK)</button>
+            <button class="control-btn" onclick="toggleScreenPowerForSelected()">Toggle Screen ON/OFF</button>
+            <textarea id="bulkText" class="bulk-text" placeholder="clipboard / text input"></textarea>
+            <button class="control-btn" onclick="setClipboardForSelected()">Set clipboard</button>
+            <button class="control-btn" onclick="getClipboardForSelected()">Get clipboard</button>
+            <button class="control-btn" onclick="sendTextAsKeysForSelected()">Send as keys</button>
+            <button class="control-btn" onclick="swipeUpPinAndOkForSelected()">Swipe Up -> Send Pin -> Send OK</button>
+            <div class="footer-adjust-row">
+                <span>Footer offset</span>
+                <button class="control-btn" onclick="adjustFooterPadding(-10)">−</button>
+                <button class="control-btn" onclick="adjustFooterPadding(10)">+</button>
+                <span id="footerAdjustValue" class="footer-adjust-value">55px</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="video-container">
+            <div class="stream-panel" id="panel1">
+                <div class="stream-content"><video id="player1" autoplay muted playsinline></video></div>
+            </div>
+            <div class="stream-panel" id="panel2">
+                <div class="stream-content"><video id="player2" autoplay muted playsinline></video></div>
+            </div>
+            <div class="stream-panel" id="panel3">
+                <div class="stream-content"><video id="player3" autoplay muted playsinline></video></div>
+            </div>
+        </div>
+        <div id="debugStatusMulti" class="debug-status"></div>
+    </div>
+
+    <script>
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('expanded');
+            document.body.classList.toggle('sidebar-open', sidebar.classList.contains('expanded'));
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const deviceUdids = [urlParams.get('device1'), urlParams.get('device2'), urlParams.get('device3')].filter(Boolean);
+        if (deviceUdids.length < 1 || deviceUdids.length > 3) {
+            alert('Provide 1 to 3 devices.');
+            window.location.href = '/';
+            throw new Error('Invalid device count');
+        }
+
+        if (deviceUdids.length < 3) {
+            document.getElementById('panel3').style.display = 'none';
+            document.getElementById('sidebarTargetRow3').style.display = 'none';
+        }
+        if (deviceUdids.length < 2) {
+            document.getElementById('panel2').style.display = 'none';
+            document.getElementById('selectSidebar2').closest('label').style.display = 'none';
+        }
+
+        const deviceNums = [1, 2, 3].filter((n) => n <= deviceUdids.length);
+        const devices = {};
+        const selectedState = { 1: true, 2: true, 3: true };
+        deviceNums.forEach((n, idx) => {
+            devices[n] = { udid: deviceUdids[idx], videoEl: `player${n}` };
+            document.getElementById(`targetLabel${n}`).textContent = `Device ${n}: ${deviceUdids[idx]}`;
+        });
+
+        if (deviceUdids.length === 1) {
+            const onlySelect = document.getElementById('selectSidebar1');
+            onlySelect.checked = true;
+            onlySelect.disabled = true;
+        }
+
+        deviceNums.forEach((n) => {
+            const side = document.getElementById(`selectSidebar${n}`);
+            side?.addEventListener('change', (e) => {
+                selectedState[n] = e.target.checked;
+                updateVisiblePanels();
+            });
+        });
+
+        function getSelectedDeviceNums() {
+            return deviceNums.filter((n) => selectedState[n]);
+        }
+
+        function isPortraitMode() {
+            return window.innerHeight > window.innerWidth;
+        }
+
+        function updateVisiblePanels() {
+            if (!isPortraitMode()) {
+                deviceNums.forEach((n) => {
+                    const panel = document.getElementById(`panel${n}`);
+                    if (panel) {
+                        panel.classList.remove('active-portrait');
+                        panel.style.display = 'flex';
+                    }
+                });
+                return;
+            }
+
+            const selected = getSelectedDeviceNums();
+            const activeDeviceNum = selected.length > 0 ? selected[0] : null;
+            deviceNums.forEach((n) => {
+                const panel = document.getElementById(`panel${n}`);
+                if (!panel) return;
+                const isActive = n === activeDeviceNum;
+                panel.classList.toggle('active-portrait', isActive);
+                panel.style.display = isActive ? 'flex' : 'none';
+            });
+        }
+
+        const muxers = {}, parsers = {}, inputs = {};
+        const statsByDevice = {};
+        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown' };
+        const FOOTER_OFFSET_STORAGE_KEY = 'debugFooterExtraPx';
+        let debugFooterExtraPx = 55;
+        const screenPowerOn = { 1: false, 2: false, 3: false };
+        const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
+        let ephemeralBannerTimer = null;
+
+        function showEphemeralMessage(text) {
+            const banner = document.getElementById('ephemeralBanner');
+            if (!banner) return;
+            banner.textContent = text;
+            banner.classList.add('visible');
+            if (ephemeralBannerTimer) {
+                clearTimeout(ephemeralBannerTimer);
+            }
+            ephemeralBannerTimer = setTimeout(() => {
+                banner.classList.remove('visible');
+            }, 2600);
+        }
+
+        function getEffectiveFooterOffsetPx() {
+            return isPortraitMode() ? Math.max(100, debugFooterExtraPx) : debugFooterExtraPx;
+        }
+
+        function applyFooterPadding() {
+            const debugEl = document.getElementById('debugStatusMulti');
+            if (!debugEl) return;
+            const safeInset = 'env(safe-area-inset-bottom, 0px)';
+            const effectiveOffsetPx = getEffectiveFooterOffsetPx();
+            debugEl.style.paddingBottom = `calc(${effectiveOffsetPx}px + ${safeInset})`;
+            const valueEl = document.getElementById('footerAdjustValue');
+            if (valueEl) {
+                valueEl.textContent = `${effectiveOffsetPx}px`;
+            }
+        }
+
+        function loadFooterPaddingSetting() {
+            try {
+                const saved = parseInt(localStorage.getItem(FOOTER_OFFSET_STORAGE_KEY) || '', 10);
+                if (!isNaN(saved)) {
+                    debugFooterExtraPx = Math.min(220, Math.max(0, saved));
+                }
+            } catch (e) {
+                // Ignore storage access errors.
+            }
+            applyFooterPadding();
+        }
+
+        function adjustFooterPadding(deltaPx) {
+            debugFooterExtraPx = Math.min(220, Math.max(0, debugFooterExtraPx + deltaPx));
+            try {
+                localStorage.setItem(FOOTER_OFFSET_STORAGE_KEY, String(debugFooterExtraPx));
+            } catch (e) {
+                // Ignore storage access errors.
+            }
+            applyFooterPadding();
+        }
+        function initInput(deviceNum, width, height) {
+            function input_data_cb(data) {
+                socket.emit('control_data', { device_udid: devices[deviceNum].udid, data });
+            }
+            const videoElement = document.getElementById(devices[deviceNum].videoEl);
+            inputs[deviceNum] = new ScrcpyInput(input_data_cb, videoElement, width, height, false);
+            setTimeout(() => {
+                if (inputs[deviceNum]) {
+                    inputs[deviceNum].set_screen_power_mode(false);
+                }
+            }, 250);
+        }
+
+        deviceNums.forEach((deviceNum) => {
+            const device = devices[deviceNum];
+            const videoElement = document.getElementById(device.videoEl);
+            statsByDevice[deviceNum] = {
+                bytesSinceTick: 0,
+                framesSinceTick: 0,
+                kbps: 0,
+                inputFps: 0,
+                renderedFps: 0,
+                renderedFrameCounter: 0,
+                decodedFrames: 0,
+                droppedFrames: 0,
+                totalFrames: 0,
+                parserName: 'n/a',
+                parserHeaderAttempts: 0,
+                parserStreamId: null,
+                parserRawWidth: null,
+                parserRawHeight: null,
+                parserAppliedWidth: null,
+                parserAppliedHeight: null,
+                parserHeaderHex: '',
+                parserNameHex: '',
+                parserStage: 'init',
+                parserLikelyMidstreamCorruption: false,
+            };
+            muxers[deviceNum] = new JMuxer({ node: device.videoEl, mode: 'video', flushingTime: 0, fps: 60, clearBuffer: true, onReady: () => { if (videoElement) videoElement.controls = false; } });
+            parsers[deviceNum] = new VideoParser(({ type, data }) => {
+                if (type === 'nalu') muxers[deviceNum].feed({ video: data });
+                else if (type === 'init') { muxers[deviceNum].feed({ video: data['sps'] }); muxers[deviceNum].feed({ video: data['pps'] }); }
+                else if (type === 'screen_size') {
+                    if (statsByDevice[deviceNum]) {
+                        statsByDevice[deviceNum].parserAppliedWidth = data['width'];
+                        statsByDevice[deviceNum].parserAppliedHeight = data['height'];
+                    }
+                    initInput(deviceNum, data['width'], data['height']);
+                }
+                else if (type === 'size_change' && inputs[deviceNum]) inputs[deviceNum].resizeScreen(data['width'], data['height']);
+            }, false, (debugPayload) => {
+                const stats = statsByDevice[deviceNum];
+                if (!stats || !debugPayload) return;
+                stats.parserStage = debugPayload.stage || stats.parserStage;
+                stats.parserHeaderAttempts = debugPayload.headerParseAttempts ?? stats.parserHeaderAttempts;
+                stats.parserName = (debugPayload.namePrintablePreview || debugPayload.name || stats.parserName || '').replace(/\0/g, '');
+                stats.parserStreamId = debugPayload.streamId ?? stats.parserStreamId;
+                stats.parserRawWidth = debugPayload.parsedWidth ?? stats.parserRawWidth;
+                stats.parserRawHeight = debugPayload.parsedHeight ?? stats.parserRawHeight;
+                stats.parserAppliedWidth = debugPayload.width ?? stats.parserAppliedWidth;
+                stats.parserAppliedHeight = debugPayload.height ?? stats.parserAppliedHeight;
+                stats.parserHeaderHex = debugPayload.headerRawHex || stats.parserHeaderHex;
+                stats.parserNameHex = debugPayload.nameRawHex || stats.parserNameHex;
+                stats.parserLikelyMidstreamCorruption = Boolean(
+                    debugPayload.likelyMidstreamCorruption || stats.parserLikelyMidstreamCorruption
+                );
+            });
+
+            if (videoElement && typeof videoElement.requestVideoFrameCallback === 'function') {
+                const onFrame = () => {
+                    const stats = statsByDevice[deviceNum];
+                    if (stats) {
+                        stats.renderedFrameCounter += 1;
+                    }
+                    videoElement.requestVideoFrameCallback(onFrame);
+                };
+                videoElement.requestVideoFrameCallback(onFrame);
+            }
+        });
+
+        function sendControl(deviceNum, action) {
+            const input = inputs[deviceNum];
+            if (!input || !devices[deviceNum]) return;
+            const emitKey = (keyCode, actionNum) => socket.emit('control_data', { device_udid: devices[deviceNum].udid, data: input.createKeyProtocolData(actionNum, keyCode, 0, 0) });
+            const keyCodeMap = {
+                'power': () => { emitKey(26, 0); setTimeout(() => emitKey(26, 1), 100); },
+                'confirm': () => { emitKey(66, 0); setTimeout(() => emitKey(66, 1), 100); },
+                'vol-down': () => { emitKey(25, 0); setTimeout(() => emitKey(25, 1), 100); },
+                'vol-up': () => { emitKey(24, 0); setTimeout(() => emitKey(24, 1), 100); },
+                'back': () => { emitKey(4, 0); setTimeout(() => emitKey(4, 1), 100); },
+                'home': () => { emitKey(3, 0); setTimeout(() => emitKey(3, 1), 100); },
+                'menu': () => { emitKey(187, 0); setTimeout(() => emitKey(187, 1), 100); }
+            };
+            keyCodeMap[action]?.();
+        }
+
+        function sendControlToSelected(action) {
+            getSelectedDeviceNums().forEach((n) => sendControl(n, action));
+        }
+
+        function toggleScreenPowerForSelected() {
+            getSelectedDeviceNums().forEach((n) => {
+                if (!inputs[n]) return;
+                screenPowerOn[n] = !screenPowerOn[n];
+                inputs[n].set_screen_power_mode(screenPowerOn[n]);
+            });
+        }
+
+        function forceScreenPowerOffForAllConnected() {
+            let sent = false;
+            deviceNums.forEach((n) => {
+                if (!inputs[n]) return;
+                screenPowerOn[n] = false;
+                inputs[n].set_screen_power_mode(false);
+                sent = true;
+            });
+            if (sent) {
+                showEphemeralMessage('sent screen power off to all connected device');
+            }
+        }
+
+        function setClipboardForSelected() {
+            const text = document.getElementById('bulkText').value || '';
+            getSelectedDeviceNums().forEach((n) => {
+                if (!inputs[n]) return;
+                socket.emit('control_data', { device_udid: devices[n].udid, data: inputs[n].createSetClipboardControlMessage(text, false) });
+            });
+        }
+
+        function getClipboardForSelected() {
+            getSelectedDeviceNums().forEach((n) => {
+                if (!inputs[n]) return;
+                socket.emit('control_data', { device_udid: devices[n].udid, data: inputs[n].createGetClipboardControlMessage() });
+            });
+        }
+
+        function sendTextAsKeysForSelected() {
+            const text = document.getElementById('bulkText').value || '';
+            if (!text) return;
+            getSelectedDeviceNums().forEach((n) => {
+                if (!inputs[n]) return;
+                socket.emit('control_data', { device_udid: devices[n].udid, data: inputs[n].createTextControlMessage(text) });
+            });
+        }
+
+        function sendSwipeUpGesture(deviceNum) {
+            const input = inputs[deviceNum]; if (!input || !devices[deviceNum]) return;
+            const x = Math.floor(input.width * 0.5);
+            const yStart = Math.floor(input.height * 0.82);
+            const yEnd = Math.floor(input.height * 0.2);
+            const frames = 6;
+            const pressure = 65535;
+            const udid = devices[deviceNum].udid;
+
+            socket.emit('control_data', { device_udid: udid, data: input.createTouchProtocolData(0, x, yStart, input.width, input.height, 0, 0, pressure) });
+            for (let i = 1; i < frames; i++) {
+                const y = Math.floor(yStart - ((yStart - yEnd) * i / frames));
+                setTimeout(() => {
+                    socket.emit('control_data', { device_udid: udid, data: input.createTouchProtocolData(2, x, y, input.width, input.height, 0, 0, pressure) });
+                }, i * 20);
+            }
+            setTimeout(() => {
+                socket.emit('control_data', { device_udid: udid, data: input.createTouchProtocolData(1, x, yEnd, input.width, input.height, 0, 0, 0) });
+            }, frames * 20 + 20);
+        }
+
+        async function swipeUpPinAndOkForSelected() {
+            const targets = getSelectedDeviceNums();
+            if (targets.length === 0) return;
+            const response = await fetch('/api/pin');
+            const payload = await response.json();
+            const pin = payload.pin || '';
+            if (!pin) {
+                document.getElementById('bulkText').value = 'No memorized PIN. Set PIN on selection page.';
+                return;
+            }
+            targets.forEach((n) => {
+                if (!inputs[n]) return;
+                sendSwipeUpGesture(n);
+                setTimeout(() => {
+                    socket.emit('control_data', { device_udid: devices[n].udid, data: inputs[n].createTextControlMessage(pin) });
+                    setTimeout(() => sendControl(n, 'confirm'), 120);
+                }, 280);
+            });
+        }
+
+        const socket = io({ reconnection: true, autoConnect: true });
+        const udidToDeviceNum = (udid) => deviceNums.find((n) => devices[n].udid === udid) || null;
+        const emitAttention = () => {
+            socket.emit('viewer_attention', { visible: document.visibilityState === 'visible' });
+        };
+
+        socket.on('video_data', (payload) => {
+            const deviceNum = udidToDeviceNum(payload.device_udid);
+            if (!deviceNum || !parsers[deviceNum]) return;
+            const chunk = new Uint8Array(payload.data);
+            parsers[deviceNum].appendData(chunk);
+            if (statsByDevice[deviceNum]) {
+                statsByDevice[deviceNum].bytesSinceTick += chunk.byteLength;
+                statsByDevice[deviceNum].framesSinceTick += 1;
+            }
+            lastVideoDataAt[deviceNum] = Date.now();
+        });
+
+        socket.on('device_message', (payload) => {
+            if (!payload) return;
+            const message = payload.message || {};
+            if (message.type === 'clipboard') {
+                document.getElementById('bulkText').value = message.text || '';
+            }
+        });
+
+        socket.on('connect', () => {
+            emitAttention();
+            deviceNums.forEach((n) => socket.emit('start_device', { device_udid: devices[n].udid }));
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (!socket.connected) return;
+            emitAttention();
+        });
+
+        function updateStatsTick() {
+            deviceNums.forEach((n) => {
+                const stats = statsByDevice[n];
+                if (!stats) return;
+                stats.kbps = (stats.bytesSinceTick * 8) / 1000;
+                stats.inputFps = stats.framesSinceTick;
+                stats.renderedFps = stats.renderedFrameCounter;
+                stats.bytesSinceTick = 0;
+                stats.framesSinceTick = 0;
+                stats.renderedFrameCounter = 0;
+
+                const videoEl = document.getElementById(devices[n].videoEl);
+                if (videoEl && typeof videoEl.getVideoPlaybackQuality === 'function') {
+                    const q = videoEl.getVideoPlaybackQuality();
+                    stats.droppedFrames = q.droppedVideoFrames || 0;
+                    stats.totalFrames = q.totalVideoFrames || 0;
+                    stats.decodedFrames = Math.max(0, stats.totalFrames - stats.droppedFrames);
+                }
+            });
+        }
+
+        async function loadStreamConfig() {
+            try {
+                const response = await fetch('/api/stream_config', { cache: 'no-store' });
+                if (!response.ok) return;
+                const data = await response.json();
+                streamConfig.videoBitRate = data.video_bit_rate ?? streamConfig.videoBitRate;
+                streamConfig.maxFps = data.max_fps ?? streamConfig.maxFps;
+            } catch (e) {
+                // Keep unknown values in diagnostics footer.
+            }
+        }
+
+        function updateDebugStatus() {
+            const activeDeviceNum = getSelectedDeviceNums()[0] || null;
+            const lines = [];
+            if (activeDeviceNum) {
+                const s = statsByDevice[activeDeviceNum] || {};
+                lines.push(
+                    `d${activeDeviceNum} frame_age_s=${((Date.now() - lastVideoDataAt[activeDeviceNum]) / 1000).toFixed(1)} in_kbps=${(s.kbps || 0).toFixed(1)} in_fps=${(s.inputFps || 0).toFixed(1)} render_fps=${(s.renderedFps || 0).toFixed(1)} decoded=${s.decodedFrames || 0} dropped=${s.droppedFrames || 0}`,
+                );
+                lines.push(
+                    `d${activeDeviceNum} parser stage=${s.parserStage || 'n/a'} attempts=${s.parserHeaderAttempts || 0} stream_id=${s.parserStreamId ?? 'n/a'} applied_w=${s.parserAppliedWidth ?? 'n/a'} applied_h=${s.parserAppliedHeight ?? 'n/a'}`
+                );
+                lines.push(
+                    `d${activeDeviceNum} parser name=${s.parserName || 'n/a'} midstream_corruption=${s.parserLikelyMidstreamCorruption ? 'yes' : 'no'}`
+                );
+                // if (s.parserNameHex) {
+                //     lines.push(`d${activeDeviceNum} parser name_hex=${s.parserNameHex}`);
+                // }
+                // if (s.parserHeaderHex) {
+                //     lines.push(`d${activeDeviceNum} parser dims_hex=${s.parserHeaderHex}`);
+                // }
+            }
+            document.getElementById('debugStatusMulti').textContent = lines.join('\n');
+        }
+
+        function goBack() {
+            if (confirm('Stop streaming selected devices and go back?')) {
+                deviceNums.forEach((n) => socket.emit('stop_device', { device_udid: devices[n].udid }));
+                socket.disconnect();
+                window.location.href = '/';
+            }
+        }
+
+        window.addEventListener('beforeunload', () => {
+            deviceNums.forEach((n) => socket.emit('stop_device', { device_udid: devices[n].udid }));
+            socket.disconnect();
+        });
+
+        loadStreamConfig();
+        setInterval(updateStatsTick, 1000);
+        setInterval(updateDebugStatus, 500);
+        setInterval(forceScreenPowerOffForAllConnected, 15 * 1000);
+        loadFooterPaddingSetting();
+        updateDebugStatus();
+        updateVisiblePanels();
+
+        window.addEventListener('resize', updateVisiblePanels);
+        window.addEventListener('orientationchange', updateVisiblePanels);
+        window.addEventListener('resize', applyFooterPadding);
+        window.addEventListener('orientationchange', applyFooterPadding);
+
+    </script>
+</body>
+</html>
