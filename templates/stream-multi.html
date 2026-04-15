@@ -592,17 +592,17 @@
                     `d${activeDeviceNum} frame_age_s=${((Date.now() - lastVideoDataAt[activeDeviceNum]) / 1000).toFixed(1)} in_kbps=${(s.kbps || 0).toFixed(1)} in_fps=${(s.inputFps || 0).toFixed(1)} render_fps=${(s.renderedFps || 0).toFixed(1)} decoded=${s.decodedFrames || 0} dropped=${s.droppedFrames || 0}`,
                 );
                 lines.push(
-                    `d${activeDeviceNum} parser stage=${s.parserStage || 'n/a'} attempts=${s.parserHeaderAttempts || 0} stream_id=${s.parserStreamId ?? 'n/a'} raw_w=${s.parserRawWidth ?? 'n/a'} raw_h=${s.parserRawHeight ?? 'n/a'} applied_w=${s.parserAppliedWidth ?? 'n/a'} applied_h=${s.parserAppliedHeight ?? 'n/a'}`
+                    `d${activeDeviceNum} parser stage=${s.parserStage || 'n/a'} attempts=${s.parserHeaderAttempts || 0} stream_id=${s.parserStreamId ?? 'n/a'} applied_w=${s.parserAppliedWidth ?? 'n/a'} applied_h=${s.parserAppliedHeight ?? 'n/a'}`
                 );
                 lines.push(
                     `d${activeDeviceNum} parser name=${s.parserName || 'n/a'} midstream_corruption=${s.parserLikelyMidstreamCorruption ? 'yes' : 'no'}`
                 );
-                if (s.parserNameHex) {
-                    lines.push(`d${activeDeviceNum} parser name_hex=${s.parserNameHex}`);
-                }
-                if (s.parserHeaderHex) {
-                    lines.push(`d${activeDeviceNum} parser dims_hex=${s.parserHeaderHex}`);
-                }
+                // if (s.parserNameHex) {
+                //     lines.push(`d${activeDeviceNum} parser name_hex=${s.parserNameHex}`);
+                // }
+                // if (s.parserHeaderHex) {
+                //     lines.push(`d${activeDeviceNum} parser dims_hex=${s.parserHeaderHex}`);
+                // }
             }
             document.getElementById('debugStatusMulti').textContent = lines.join('\n');
         }
