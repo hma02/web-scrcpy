@@ -172,7 +172,7 @@
                 <span>Footer offset</span>
                 <button class="control-btn" onclick="adjustFooterPadding(-10)">−</button>
                 <button class="control-btn" onclick="adjustFooterPadding(10)">+</button>
-                <span id="footerAdjustValue" class="footer-adjust-value">55px</span>
+                <span id="footerAdjustValue" class="footer-adjust-value">35px</span>
             </div>
         </div>
     </div>
@@ -273,7 +273,7 @@
         const statsByDevice = {};
         const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown' };
         const FOOTER_OFFSET_STORAGE_KEY = 'debugFooterExtraPx';
-        let debugFooterExtraPx = 55;
+        let debugFooterExtraPx = 35;
         const screenPowerOn = { 1: false, 2: false, 3: false };
         const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
         let ephemeralBannerTimer = null;
@@ -292,7 +292,7 @@
         }
 
         function getEffectiveFooterOffsetPx() {
-            return isPortraitMode() ? Math.max(100, debugFooterExtraPx) : debugFooterExtraPx;
+            return isPortraitMode() ? Math.max(50, debugFooterExtraPx) : debugFooterExtraPx;
         }
 
         function applyFooterPadding() {
@@ -311,7 +311,7 @@
             try {
                 const saved = parseInt(localStorage.getItem(FOOTER_OFFSET_STORAGE_KEY) || '', 10);
                 if (!isNaN(saved)) {
-                    debugFooterExtraPx = Math.min(220, Math.max(0, saved));
+                    debugFooterExtraPx = Math.min(80, Math.max(0, saved));
                 }
             } catch (e) {
                 // Ignore storage access errors.
@@ -320,7 +320,7 @@
         }
 
         function adjustFooterPadding(deltaPx) {
-            debugFooterExtraPx = Math.min(220, Math.max(0, debugFooterExtraPx + deltaPx));
+            debugFooterExtraPx = Math.min(80, Math.max(0, debugFooterExtraPx + deltaPx));
             try {
                 localStorage.setItem(FOOTER_OFFSET_STORAGE_KEY, String(debugFooterExtraPx));
             } catch (e) {
