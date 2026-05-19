@@ -155,6 +155,7 @@
 
         <div class="selector-box">
             <strong>Controls (apply to selected devices)</strong>
+            <button class="control-btn" id="restartAdbBtn" onclick="restartAdbServerForSelected()">⟳ Restart ADB server</button>
             <button class="control-btn" onclick="sendControlToSelected('power')">⏻ Power</button>
             <button class="control-btn" onclick="sendControlToSelected('back')">← Back</button>
             <button class="control-btn" onclick="sendControlToSelected('home')">⌂ Home</button>
@@ -426,6 +427,46 @@
 
         function sendControlToSelected(action) {
             getSelectedDeviceNums().forEach((n) => sendControl(n, action));
+        }
+
+        async function restartAdbServerForSelected() {
+            const selectedNums = getSelectedDeviceNums();
+            if (selectedNums.length === 0) {
+                showEphemeralMessage('Select at least one target device');
+                return;
+            }
+            const selectedUdids = selectedNums
+                .map((n) => devices[n]?.udid)
+                .filter(Boolean);
+            if (selectedUdids.length === 0) {
+                showEphemeralMessage('No valid target device selected');
+                return;
+            }
+
+            const btn = document.getElementById('restartAdbBtn');
+            if (btn) btn.disabled = true;
+            showEphemeralMessage('Restarting ADB server...');
+            try {
+                const response = await fetch('/api/restart_adb_server', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ devices: selectedUdids }),
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok || payload.ok === false) {
+                    const msg = payload.error || `Failed (${response.status})`;
+                    showEphemeralMessage(`ADB restart failed: ${msg}`);
+                    return;
+                }
+                showEphemeralMessage('ADB restarted. Reconnecting devices, page will refresh...');
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+            } catch (err) {
+                showEphemeralMessage(`ADB restart error: ${err}`);
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         }
 
         function toggleScreenPowerForSelected() {
