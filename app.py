@@ -51,7 +51,7 @@ client_attention = {}
 video_bit_rate = "800000"
 max_fps = 30
 memorized_pin = ""
-UNLOCK_PIN_FILE = Path(__file__).with_name("tmp.txt")
+UNLOCK_PIN_FILE = Path("tmp.txt")
 server_start_time = time.time()
 device_first_seen = {}
 
@@ -360,13 +360,21 @@ def pin_memory():
 
 @app.route('/api/unlock_pin')
 def get_unlock_pin():
-    """Read the unlock PIN from a local tmp.txt file next to the app."""
+    """Read the unlock PIN from local tmp.txt in the server working directory."""
     try:
         pin = UNLOCK_PIN_FILE.read_text(encoding='utf-8').strip()
+        method = 'tmp.txt file'
+        path = str(UNLOCK_PIN_FILE.resolve())
     except FileNotFoundError:
         pin = '123456'
+        method = 'default password'
+        path = str(UNLOCK_PIN_FILE.resolve())
     # PIN entry is sent as text input; keep only digits to avoid accidental whitespace/comments.
-    return jsonify({'pin': ''.join(ch for ch in pin if ch.isdigit())})
+    return jsonify({
+        'pin': ''.join(ch for ch in pin if ch.isdigit()),
+        'method': method,
+        'path': path,
+    })
 
 
 @app.route('/api/stream_config')

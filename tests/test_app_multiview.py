@@ -117,7 +117,9 @@ def test_unlock_pin_reads_tmp_file(monkeypatch, tmp_path):
     response = client.get('/api/unlock_pin')
 
     assert response.status_code == 200
-    assert response.get_json() == {'pin': '987654'}
+    assert response.get_json()['pin'] == '987654'
+    assert response.get_json()['method'] == 'tmp.txt file'
+    assert response.get_json()['path'] == str(pin_file.resolve())
 
 
 def test_unlock_pin_defaults_when_tmp_file_missing(monkeypatch, tmp_path):
@@ -128,4 +130,6 @@ def test_unlock_pin_defaults_when_tmp_file_missing(monkeypatch, tmp_path):
     response = client.get('/api/unlock_pin')
 
     assert response.status_code == 200
-    assert response.get_json() == {'pin': '123456'}
+    assert response.get_json()['pin'] == '123456'
+    assert response.get_json()['method'] == 'default password'
+    assert response.get_json()['path'] == str((tmp_path / 'missing-tmp.txt').resolve())

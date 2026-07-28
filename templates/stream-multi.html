@@ -501,6 +501,7 @@
             const response = await fetch('/api/unlock_pin', { cache: 'no-store' });
             const payload = await response.json();
             const pin = payload.pin || '';
+            showEphemeralMessage(`Unlock PIN source: ${payload.method || 'unknown'}${payload.path ? ` (${payload.path})` : ''}`);
             if (!pin) {
                 document.getElementById('bulkText').value = 'No unlock PIN found in tmp.txt.';
                 return;
