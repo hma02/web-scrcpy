@@ -151,6 +151,7 @@
             <label><input type="checkbox" id="selectSidebar1" checked> <span id="targetLabel1">Device 1</span></label>
             <label><input type="checkbox" id="selectSidebar2" checked> <span id="targetLabel2">Device 2</span></label>
             <label id="sidebarTargetRow3"><input type="checkbox" id="selectSidebar3" checked> <span id="targetLabel3">Device 3</span></label>
+            <label id="sidebarTargetRow4"><input type="checkbox" id="selectSidebar4" checked> <span id="targetLabel4">Device 4</span></label>
         </div>
 
         <div class="selector-box">
@@ -188,6 +189,9 @@
             <div class="stream-panel" id="panel3">
                 <div class="stream-content"><video id="player3" autoplay muted playsinline></video></div>
             </div>
+            <div class="stream-panel" id="panel4">
+                <div class="stream-content"><video id="player4" autoplay muted playsinline></video></div>
+            </div>
         </div>
         <div id="debugStatusMulti" class="debug-status"></div>
     </div>
@@ -200,25 +204,22 @@
         }
 
         const urlParams = new URLSearchParams(window.location.search);
-        const deviceUdids = [urlParams.get('device1'), urlParams.get('device2'), urlParams.get('device3')].filter(Boolean);
-        if (deviceUdids.length < 1 || deviceUdids.length > 3) {
-            alert('Provide 1 to 3 devices.');
+        const maxDevices = 4;
+        const deviceUdids = Array.from({ length: maxDevices }, (_, i) => urlParams.get(`device${i + 1}`)).filter(Boolean);
+        if (deviceUdids.length < 1 || deviceUdids.length > maxDevices) {
+            alert(`Provide 1 to ${maxDevices} devices.`);
             window.location.href = '/';
             throw new Error('Invalid device count');
         }
 
-        if (deviceUdids.length < 3) {
-            document.getElementById('panel3').style.display = 'none';
-            document.getElementById('sidebarTargetRow3').style.display = 'none';
-        }
-        if (deviceUdids.length < 2) {
-            document.getElementById('panel2').style.display = 'none';
-            document.getElementById('selectSidebar2').closest('label').style.display = 'none';
+        const deviceNums = Array.from({ length: maxDevices }, (_, i) => i + 1).filter((n) => n <= deviceUdids.length);
+        for (let n = deviceUdids.length + 1; n <= maxDevices; n++) {
+            document.getElementById(`panel${n}`).style.display = 'none';
+            document.getElementById(`sidebarTargetRow${n}`).style.display = 'none';
         }
 
-        const deviceNums = [1, 2, 3].filter((n) => n <= deviceUdids.length);
         const devices = {};
-        const selectedState = { 1: true, 2: true, 3: true };
+        const selectedState = Object.fromEntries(deviceNums.map((n) => [n, true]));
         deviceNums.forEach((n, idx) => {
             devices[n] = { udid: deviceUdids[idx], videoEl: `player${n}` };
             document.getElementById(`targetLabel${n}`).textContent = `Device ${n}: ${deviceUdids[idx]}`;
@@ -274,8 +275,8 @@
         const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown' };
         const FOOTER_OFFSET_STORAGE_KEY = 'debugFooterExtraPx';
         let debugFooterExtraPx = 35;
-        const screenPowerOn = { 1: false, 2: false, 3: false };
-        const lastVideoDataAt = { 1: Date.now(), 2: Date.now(), 3: Date.now() };
+        const screenPowerOn = Object.fromEntries(deviceNums.map((n) => [n, false]));
+        const lastVideoDataAt = Object.fromEntries(deviceNums.map((n) => [n, Date.now()]));
         let ephemeralBannerTimer = null;
 
         function showEphemeralMessage(text) {
@@ -515,6 +516,7 @@
         }
 
         const socket = io({ reconnection: true, autoConnect: true });
+        let nextDeviceStartIndex = 0;
         const udidToDeviceNum = (udid) => deviceNums.find((n) => devices[n].udid === udid) || null;
         const emitAttention = () => {
             socket.emit('viewer_attention', { visible: document.visibilityState === 'visible' });
@@ -540,9 +542,21 @@
             }
         });
 
+        function startNextDeviceFromLeft() {
+            if (nextDeviceStartIndex >= deviceNums.length) return;
+            const deviceNum = deviceNums[nextDeviceStartIndex];
+            nextDeviceStartIndex += 1;
+            socket.emit('start_device', { device_udid: devices[deviceNum].udid });
+        }
+
+        socket.on('device_started', () => {
+            startNextDeviceFromLeft();
+        });
+
         socket.on('connect', () => {
             emitAttention();
-            deviceNums.forEach((n) => socket.emit('start_device', { device_udid: devices[n].udid }));
+            nextDeviceStartIndex = 0;
+            startNextDeviceFromLeft();
         });
 
         document.addEventListener('visibilitychange', () => {
