@@ -168,7 +168,7 @@
             <button class="control-btn" onclick="setClipboardForSelected()">Set clipboard</button>
             <button class="control-btn" onclick="getClipboardForSelected()">Get clipboard</button>
             <button class="control-btn" onclick="sendTextAsKeysForSelected()">Send as keys</button>
-            <button class="control-btn" onclick="swipeUpPinAndOkForSelected()">Swipe Up -> Send Pin -> Send OK</button>
+            <button class="control-btn" onclick="unlockSelectedDevices()">Unlock</button>
             <div class="footer-adjust-row">
                 <span>Footer offset</span>
                 <button class="control-btn" onclick="adjustFooterPadding(-10)">−</button>
@@ -495,14 +495,15 @@
             }, frames * 20 + 20);
         }
 
-        async function swipeUpPinAndOkForSelected() {
+        async function unlockSelectedDevices() {
             const targets = getSelectedDeviceNums();
             if (targets.length === 0) return;
-            const response = await fetch('/api/pin');
+            const response = await fetch('/api/unlock_pin', { cache: 'no-store' });
             const payload = await response.json();
             const pin = payload.pin || '';
+            showEphemeralMessage(`Unlock PIN source: ${payload.method || 'unknown'}${payload.path ? ` (${payload.path})` : ''}`);
             if (!pin) {
-                document.getElementById('bulkText').value = 'No memorized PIN. Set PIN on selection page.';
+                document.getElementById('bulkText').value = 'No unlock PIN found in tmp.txt.';
                 return;
             }
             targets.forEach((n) => {
