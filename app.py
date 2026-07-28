@@ -8,6 +8,7 @@ import time
 import threading
 from urllib.parse import quote
 from collections import deque
+from pathlib import Path
 # Force inclusion of simple_websocket for threading async_mode in bundled binary
 import simple_websocket  # noqa: F401
 
@@ -50,6 +51,7 @@ client_attention = {}
 video_bit_rate = "800000"
 max_fps = 30
 memorized_pin = ""
+UNLOCK_PIN_FILE = Path(__file__).with_name("tmp.txt")
 server_start_time = time.time()
 device_first_seen = {}
 
@@ -354,6 +356,17 @@ def pin_memory():
     # PIN is expected as digits; keep only digits to avoid accidental extra chars.
     memorized_pin = ''.join(ch for ch in pin if ch.isdigit())
     return jsonify({'pin': memorized_pin})
+
+
+@app.route('/api/unlock_pin')
+def get_unlock_pin():
+    """Read the unlock PIN from a local tmp.txt file next to the app."""
+    try:
+        pin = UNLOCK_PIN_FILE.read_text(encoding='utf-8').strip()
+    except FileNotFoundError:
+        pin = '123456'
+    # PIN entry is sent as text input; keep only digits to avoid accidental whitespace/comments.
+    return jsonify({'pin': ''.join(ch for ch in pin if ch.isdigit())})
 
 
 @app.route('/api/stream_config')

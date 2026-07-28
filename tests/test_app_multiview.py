@@ -105,3 +105,27 @@ def test_attention_switches_live_stream_target():
     app_module.recompute_stream_target_and_owner_locked(device)
     assert app_module.device_stream_target[device] == "ubuntu"
     assert app_module.device_control_owner[device] == "ubuntu"
+
+
+def test_unlock_pin_reads_tmp_file(monkeypatch, tmp_path):
+    reset_state()
+    pin_file = tmp_path / "tmp.txt"
+    pin_file.write_text("987654\n", encoding="utf-8")
+    monkeypatch.setattr(app_module, "UNLOCK_PIN_FILE", pin_file)
+
+    client = app_module.app.test_client()
+    response = client.get('/api/unlock_pin')
+
+    assert response.status_code == 200
+    assert response.get_json() == {'pin': '987654'}
+
+
+def test_unlock_pin_defaults_when_tmp_file_missing(monkeypatch, tmp_path):
+    reset_state()
+    monkeypatch.setattr(app_module, "UNLOCK_PIN_FILE", tmp_path / "missing-tmp.txt")
+
+    client = app_module.app.test_client()
+    response = client.get('/api/unlock_pin')
+
+    assert response.status_code == 200
+    assert response.get_json() == {'pin': '123456'}
