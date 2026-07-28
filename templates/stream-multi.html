@@ -516,6 +516,7 @@
         }
 
         const socket = io({ reconnection: true, autoConnect: true });
+        let nextDeviceStartIndex = 0;
         const udidToDeviceNum = (udid) => deviceNums.find((n) => devices[n].udid === udid) || null;
         const emitAttention = () => {
             socket.emit('viewer_attention', { visible: document.visibilityState === 'visible' });
@@ -541,9 +542,21 @@
             }
         });
 
+        function startNextDeviceFromLeft() {
+            if (nextDeviceStartIndex >= deviceNums.length) return;
+            const deviceNum = deviceNums[nextDeviceStartIndex];
+            nextDeviceStartIndex += 1;
+            socket.emit('start_device', { device_udid: devices[deviceNum].udid });
+        }
+
+        socket.on('device_started', () => {
+            startNextDeviceFromLeft();
+        });
+
         socket.on('connect', () => {
             emitAttention();
-            deviceNums.forEach((n) => socket.emit('start_device', { device_udid: devices[n].udid }));
+            nextDeviceStartIndex = 0;
+            startNextDeviceFromLeft();
         });
 
         document.addEventListener('visibilitychange', () => {
