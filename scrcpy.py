@@ -3,8 +3,8 @@ import subprocess
 import socket
 import time
 import os
-from datetime import datetime, time as dt_time
-from zoneinfo import ZoneInfo
+from datetime import datetime, time as dt_time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ADB_PATH = "adb"
 SCRCPY_SERVER_PATH = "scrcpy-server"
@@ -76,9 +76,42 @@ def get_power_save_timezone():
     return os.environ.get(POWER_SAVE_TIMEZONE_ENV, DEFAULT_POWER_SAVE_TIMEZONE)
 
 
+def _nth_weekday(year, month, weekday, nth):
+    """Return the day number for the nth weekday in a month."""
+    first = datetime(year, month, 1)
+    days_until_weekday = (weekday - first.weekday()) % 7
+    return 1 + days_until_weekday + (nth - 1) * 7
+
+
+def _is_toronto_dst(utc_now):
+    """Return True when UTC time falls in Toronto daylight saving time."""
+    year = utc_now.year
+    dst_start_day = _nth_weekday(year, 3, 6, 2)
+    dst_end_day = _nth_weekday(year, 11, 6, 1)
+    # Toronto switches at 02:00 local time: 07:00 UTC at spring start, 06:00 UTC at fall end.
+    dst_start_utc = datetime(year, 3, dst_start_day, 7, tzinfo=timezone.utc)
+    dst_end_utc = datetime(year, 11, dst_end_day, 6, tzinfo=timezone.utc)
+    return dst_start_utc <= utc_now < dst_end_utc
+
+
+def _toronto_fallback_now():
+    """Return Toronto time without relying on system tzdata being installed."""
+    utc_now = datetime.now(timezone.utc)
+    offset_hours = -4 if _is_toronto_dst(utc_now) else -5
+    toronto_tz = timezone(timedelta(hours=offset_hours), 'EDT' if offset_hours == -4 else 'EST')
+    return utc_now.astimezone(toronto_tz)
+
+
 def get_power_save_now():
     """Return the current datetime in the configured power-save timezone."""
-    return datetime.now(ZoneInfo(get_power_save_timezone()))
+    timezone_name = get_power_save_timezone()
+    try:
+        return datetime.now(ZoneInfo(timezone_name))
+    except ZoneInfoNotFoundError:
+        if timezone_name == DEFAULT_POWER_SAVE_TIMEZONE:
+            return _toronto_fallback_now()
+        print(f"Invalid power-save timezone {timezone_name!r}; using UTC")
+        return datetime.now(timezone.utc)
 
 
 def is_power_save_window(now=None):
