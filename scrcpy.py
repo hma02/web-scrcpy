@@ -18,6 +18,8 @@ VIDEO_ENABLED_OVERRIDE_ENV = "WEB_SCRCPY_VIDEO_ENABLED_OVERRIDE"
 DEFAULT_POWER_SAVE_START = "22:00"
 DEFAULT_POWER_SAVE_END = "07:00"
 DEFAULT_POWER_SAVE_TIMEZONE = "America/Toronto"
+POWER_SAVE_VIDEO_BIT_RATE = "8000"
+POWER_SAVE_MAX_FPS = 1
 
 
 def _parse_hhmm(value, default):
@@ -169,10 +171,20 @@ def is_power_save_window(now=None):
 
 def should_enable_video(now=None):
     """Return whether new or healthy sessions should run scrcpy video."""
-    override = get_video_enabled_override()
-    if override is not None:
-        return override
-    return not is_power_save_window(now)
+    return get_video_enabled_override() is not False
+
+
+def should_use_power_save_video_settings(now=None):
+    """Return whether video should stay on with very low power-save settings."""
+    return get_video_enabled_override() is None and is_power_save_window(now)
+
+
+def get_effective_stream_settings(video_bit_rate, max_fps, now=None):
+    """Return effective video enabled state and stream settings for the current mode."""
+    video_enabled = should_enable_video(now)
+    if video_enabled and should_use_power_save_video_settings(now):
+        return video_enabled, POWER_SAVE_VIDEO_BIT_RATE, POWER_SAVE_MAX_FPS, True
+    return video_enabled, str(video_bit_rate), int(max_fps), False
 
 
 class Scrcpy:
@@ -200,6 +212,9 @@ class Scrcpy:
         self.health_thread = None
         self._first_video_chunk_logged = False
         self.video_enabled = True
+        self.power_save_video_settings = False
+        self.configured_video_bit_rate = None
+        self.configured_max_fps = None
 
     def list_devices(self):
         """Populate self.devices and assign unique local ports per device."""
@@ -500,13 +515,20 @@ class Scrcpy:
         if device_udid:
             self.device_udid = device_udid
             
-        self.video_bit_rate = video_bit_rate
-        self.max_fps = max_fps
+        self.configured_video_bit_rate = video_bit_rate
+        self.configured_max_fps = max_fps
+        self.video_bit_rate = str(video_bit_rate)
+        self.max_fps = int(max_fps)
         self.video_callback = video_callback
         self.device_message_callback = device_message_callback
         self.control_recv_buffer = bytearray()
         self._first_video_chunk_logged = False
-        self.video_enabled = should_enable_video()
+        (
+            self.video_enabled,
+            self.video_bit_rate,
+            self.max_fps,
+            self.power_save_video_settings,
+        ) = get_effective_stream_settings(video_bit_rate, max_fps)
         self.stop = False
 
         result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True)
@@ -539,7 +561,7 @@ class Scrcpy:
                 # video connection with retry
                 self.video_socket = self._connect_with_retry("Video", max_retries=30, retry_delay=0.5)
             else:
-                print(f"[{self.selected_device}] Power-save window active: starting scrcpy with no playback and screen off")
+                print(f"[{self.selected_device}] Video override off: starting scrcpy with no playback and screen off")
 
             # control connection with retry
             self.control_socket = self._connect_with_retry("Control", max_retries=30, retry_delay=0.5)
@@ -649,7 +671,16 @@ class Scrcpy:
     def is_healthy(self):
         if self.stop or not self.running:
             return False
-        if self.video_enabled != should_enable_video():
+        effective = get_effective_stream_settings(
+            self.configured_video_bit_rate or self.video_bit_rate,
+            self.configured_max_fps or self.max_fps,
+        )
+        if (
+            self.video_enabled,
+            str(self.video_bit_rate),
+            int(self.max_fps),
+            self.power_save_video_settings,
+        ) != (effective[0], str(effective[1]), int(effective[2]), effective[3]):
             return False
         if self.control_socket is None:
             return False

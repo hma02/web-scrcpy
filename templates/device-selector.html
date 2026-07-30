@@ -378,7 +378,7 @@
             videoEnabledOverride = data.video_enabled_override;
             window.latestPowerSaveVideoEnabled = Boolean(data.video_enabled);
             document.getElementById('videoEnabledStatus').textContent =
-                `video_enabled: ${Boolean(data.video_enabled)}; override: ${data.video_override_mode ?? 'auto'}`;
+                `video_enabled: ${Boolean(data.video_enabled)}; override: ${data.video_override_mode ?? 'auto'}; low_power_video: ${Boolean(data.power_save_video_settings)}`;
             document.getElementById('powerSaveCurrentHour').textContent =
                 `current_hour: ${data.current_hour ?? 'unknown'} (${data.timezone ?? 'unknown'})`;
             const overrideBtn = document.getElementById('videoOverrideBtn');

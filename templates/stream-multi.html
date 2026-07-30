@@ -288,7 +288,7 @@
 
         const muxers = {}, parsers = {}, inputs = {};
         const statsByDevice = {};
-        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown', powerSaveStart: 'unknown', powerSaveEnd: 'unknown', videoEnabled: 'unknown', videoEnabledOverride: null };
+        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown', effectiveVideoBitRate: 'unknown', effectiveMaxFps: 'unknown', powerSaveStart: 'unknown', powerSaveEnd: 'unknown', videoEnabled: 'unknown', videoEnabledOverride: null, powerSaveVideoSettings: false };
         const FOOTER_OFFSET_STORAGE_KEY = 'debugFooterExtraPx';
         let debugFooterExtraPx = 35;
         const screenPowerOn = Object.fromEntries(deviceNums.map((n) => [n, false]));
@@ -671,6 +671,9 @@
                 streamConfig.powerSaveEnd = powerSave.end_hour ?? streamConfig.powerSaveEnd;
                 streamConfig.videoEnabled = powerSave.video_enabled ?? streamConfig.videoEnabled;
                 streamConfig.videoEnabledOverride = powerSave.video_enabled_override ?? streamConfig.videoEnabledOverride;
+                streamConfig.powerSaveVideoSettings = powerSave.power_save_video_settings ?? streamConfig.powerSaveVideoSettings;
+                streamConfig.effectiveVideoBitRate = powerSave.effective_video_bit_rate ?? streamConfig.effectiveVideoBitRate;
+                streamConfig.effectiveMaxFps = powerSave.effective_max_fps ?? streamConfig.effectiveMaxFps;
                 document.getElementById('powerSaveStart').value = streamConfig.powerSaveStart;
                 document.getElementById('powerSaveEnd').value = streamConfig.powerSaveEnd;
                 updatePowerSaveStatus(powerSave);
@@ -694,7 +697,7 @@
                     `d${activeDeviceNum} parser name=${s.parserName || 'n/a'} midstream_corruption=${s.parserLikelyMidstreamCorruption ? 'yes' : 'no'}`
                 );
                 lines.push(
-                    `config bitrate=${streamConfig.videoBitRate} max_fps=${streamConfig.maxFps} power_save=${streamConfig.powerSaveStart}:00-${streamConfig.powerSaveEnd}:00 video_enabled=${streamConfig.videoEnabled}`
+                    `config bitrate=${streamConfig.videoBitRate} max_fps=${streamConfig.maxFps} effective_bitrate=${streamConfig.effectiveVideoBitRate} effective_max_fps=${streamConfig.effectiveMaxFps} low_power_video=${streamConfig.powerSaveVideoSettings} power_save=${streamConfig.powerSaveStart}:00-${streamConfig.powerSaveEnd}:00 video_enabled=${streamConfig.videoEnabled}`
                 );
                 // if (s.parserNameHex) {
                 //     lines.push(`d${activeDeviceNum} parser name_hex=${s.parserNameHex}`);

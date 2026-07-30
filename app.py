@@ -6,12 +6,12 @@ from scrcpy import (
     get_power_save_now,
     get_power_save_timezone,
     get_video_enabled_override,
+    get_effective_stream_settings,
     is_power_save_window,
     is_video_disabled_override,
     set_power_save_config,
     set_video_enabled_override,
     set_video_disabled_override,
-    should_enable_video,
 )
 from stream_lifecycle import detach_client_from_device
 import argparse
@@ -395,6 +395,11 @@ def get_power_save_status():
     active = is_power_save_window(now)
     override = is_video_disabled_override()
     video_enabled_override = get_video_enabled_override()
+    video_enabled, effective_bit_rate, effective_max_fps, power_save_video_settings = get_effective_stream_settings(
+        video_bit_rate,
+        max_fps,
+        now,
+    )
     return {
         **get_power_save_config(),
         'active': active,
@@ -404,7 +409,10 @@ def get_power_save_status():
         'video_disabled_override': override,
         'video_enabled_override': video_enabled_override,
         'video_override_mode': 'auto' if video_enabled_override is None else ('on' if video_enabled_override else 'off'),
-        'video_enabled': should_enable_video(now),
+        'power_save_video_settings': power_save_video_settings,
+        'effective_video_bit_rate': effective_bit_rate,
+        'effective_max_fps': effective_max_fps,
+        'video_enabled': video_enabled,
     }
 
 
