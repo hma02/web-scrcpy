@@ -105,11 +105,11 @@ def _toronto_fallback_now():
 def get_power_save_now():
     """Return the current datetime in the configured power-save timezone."""
     timezone_name = get_power_save_timezone()
+    if timezone_name == DEFAULT_POWER_SAVE_TIMEZONE:
+        return _toronto_fallback_now()
     try:
         return datetime.now(ZoneInfo(timezone_name))
     except ZoneInfoNotFoundError:
-        if timezone_name == DEFAULT_POWER_SAVE_TIMEZONE:
-            return _toronto_fallback_now()
         print(f"Invalid power-save timezone {timezone_name!r}; using UTC")
         return datetime.now(timezone.utc)
 
