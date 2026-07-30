@@ -181,6 +181,7 @@
                     <input id="powerSaveEnd" class="power-save-input" type="number" min="0" max="23" step="1">
                 </label>
                 <button class="control-btn power-save-apply" onclick="savePowerSaveConfig()">Apply & restart</button>
+                <button class="control-btn power-save-apply" id="videoOverrideBtn" onclick="toggleVideoDisabledOverride()">Force video off</button>
                 <span id="videoEnabledStatus" class="power-save-field">video_enabled: unknown</span>
             </div>
             <div class="footer-adjust-row">
@@ -286,7 +287,7 @@
 
         const muxers = {}, parsers = {}, inputs = {};
         const statsByDevice = {};
-        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown', powerSaveStart: 'unknown', powerSaveEnd: 'unknown', videoEnabled: 'unknown' };
+        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown', powerSaveStart: 'unknown', powerSaveEnd: 'unknown', videoEnabled: 'unknown', videoDisabledOverride: false };
         const FOOTER_OFFSET_STORAGE_KEY = 'debugFooterExtraPx';
         let debugFooterExtraPx = 35;
         const screenPowerOn = Object.fromEntries(deviceNums.map((n) => [n, false]));
@@ -301,6 +302,32 @@
             return value;
         }
 
+        function updatePowerSaveStatus(powerSave) {
+            streamConfig.videoEnabled = Boolean(powerSave.video_enabled);
+            streamConfig.videoDisabledOverride = Boolean(powerSave.video_disabled_override);
+            document.getElementById('videoEnabledStatus').textContent =
+                `video_enabled: ${streamConfig.videoEnabled}; override_off: ${streamConfig.videoDisabledOverride}`;
+            document.getElementById('videoOverrideBtn').textContent = streamConfig.videoDisabledOverride ? 'Clear override' : 'Force video off';
+        }
+
+        async function toggleVideoDisabledOverride() {
+            forceScreenPowerOffForAllConnected();
+            try {
+                const response = await fetch('/api/power_save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video_disabled_override: !streamConfig.videoDisabledOverride })
+                });
+                if (!response.ok) throw new Error('Failed to update video override');
+                const data = await response.json();
+                updatePowerSaveStatus(data);
+                showEphemeralMessage(`Video disabled override ${streamConfig.videoDisabledOverride ? 'enabled' : 'cleared'}; restarting scrcpy and refreshing...`);
+                setTimeout(() => window.location.reload(), 700);
+            } catch (e) {
+                showEphemeralMessage(`Video override update failed: ${e.message}`);
+            }
+        }
+
         async function savePowerSaveConfig() {
             const startHour = clampHourInput(document.getElementById('powerSaveStart'));
             const endHour = clampHourInput(document.getElementById('powerSaveEnd'));
@@ -313,8 +340,7 @@
                 });
                 if (!response.ok) throw new Error('Failed to update power-save window');
                 const data = await response.json();
-                streamConfig.videoEnabled = Boolean(data.video_enabled);
-                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${streamConfig.videoEnabled}`;
+                updatePowerSaveStatus(data);
                 showEphemeralMessage(`Power-save window set to ${startHour}:00–${endHour}:00; video_enabled=${streamConfig.videoEnabled}; screen off sent; restarting scrcpy and refreshing...`);
                 setTimeout(() => window.location.reload(), 700);
             } catch (e) {
@@ -640,9 +666,10 @@
                 streamConfig.powerSaveStart = powerSave.start_hour ?? streamConfig.powerSaveStart;
                 streamConfig.powerSaveEnd = powerSave.end_hour ?? streamConfig.powerSaveEnd;
                 streamConfig.videoEnabled = powerSave.video_enabled ?? streamConfig.videoEnabled;
+                streamConfig.videoDisabledOverride = powerSave.video_disabled_override ?? streamConfig.videoDisabledOverride;
                 document.getElementById('powerSaveStart').value = streamConfig.powerSaveStart;
                 document.getElementById('powerSaveEnd').value = streamConfig.powerSaveEnd;
-                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${Boolean(streamConfig.videoEnabled)}`;
+                updatePowerSaveStatus(powerSave);
             } catch (e) {
                 // Keep unknown values in diagnostics footer.
             }

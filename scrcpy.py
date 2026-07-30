@@ -11,6 +11,7 @@ DEVICE_SERVER_PATH = "/data/local/tmp/scrcpy-server.jar"
 BASE_PORT = 5555  # base port for multiple devices
 POWER_SAVE_START_ENV = "WEB_SCRCPY_POWER_SAVE_START"
 POWER_SAVE_END_ENV = "WEB_SCRCPY_POWER_SAVE_END"
+VIDEO_DISABLED_OVERRIDE_ENV = "WEB_SCRCPY_VIDEO_DISABLED_OVERRIDE"
 DEFAULT_POWER_SAVE_START = "22:00"
 DEFAULT_POWER_SAVE_END = "07:00"
 
@@ -55,19 +56,38 @@ def set_power_save_config(start_hour, end_hour):
     return get_power_save_config()
 
 
-def is_power_save_window(now=None):
-    """Return True during the overnight no-playback power-save window."""
-    current = (now or datetime.now()).time()
-    start_value = os.environ.get(POWER_SAVE_START_ENV, DEFAULT_POWER_SAVE_START)
-    end_value = os.environ.get(POWER_SAVE_END_ENV, DEFAULT_POWER_SAVE_END)
-    start = _parse_hhmm(start_value, DEFAULT_POWER_SAVE_START)
-    end = _parse_hhmm(end_value, DEFAULT_POWER_SAVE_END)
+def set_video_disabled_override(enabled):
+    """Force video off regardless of the power-save schedule."""
+    if isinstance(enabled, str):
+        enabled = enabled.lower() in {'1', 'true', 'yes', 'on'}
+    os.environ[VIDEO_DISABLED_OVERRIDE_ENV] = '1' if bool(enabled) else '0'
 
-    if start == end:
+
+def is_video_disabled_override():
+    """Return whether video is manually forced off."""
+    return os.environ.get(VIDEO_DISABLED_OVERRIDE_ENV, '').lower() in {'1', 'true', 'yes', 'on'}
+
+
+def is_power_save_window(now=None):
+    """Return True during the configured no-playback power-save window."""
+    current = (now or datetime.now()).time()
+    current_hour = current.hour
+    config = get_power_save_config()
+    start_hour = config['start_hour']
+    end_hour = config['end_hour']
+
+    if start_hour == end_hour:
         return False
-    if start < end:
-        return start <= current < end
-    return current >= start or current < end
+    if start_hour < end_hour:
+        return start_hour <= current_hour < end_hour
+
+    # Overnight windows are two explicit ranges: start_hour..24 and 0..end_hour.
+    return start_hour <= current_hour < 24 or 0 <= current_hour < end_hour
+
+
+def should_enable_video(now=None):
+    """Return whether new or healthy sessions should run scrcpy video."""
+    return not is_video_disabled_override() and not is_power_save_window(now)
 
 
 class Scrcpy:
@@ -401,7 +421,7 @@ class Scrcpy:
         self.device_message_callback = device_message_callback
         self.control_recv_buffer = bytearray()
         self._first_video_chunk_logged = False
-        self.video_enabled = not is_power_save_window()
+        self.video_enabled = should_enable_video()
         self.stop = False
 
         result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True)
@@ -544,7 +564,7 @@ class Scrcpy:
     def is_healthy(self):
         if self.stop or not self.running:
             return False
-        if self.video_enabled != (not is_power_save_window()):
+        if self.video_enabled != should_enable_video():
             return False
         if self.control_socket is None:
             return False

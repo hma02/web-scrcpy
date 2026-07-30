@@ -1,6 +1,14 @@
 from flask import Flask, render_template, request, jsonify, redirect
 from flask_socketio import SocketIO, emit, send
-from scrcpy import Scrcpy, get_power_save_config, is_power_save_window, set_power_save_config
+from scrcpy import (
+    Scrcpy,
+    get_power_save_config,
+    is_power_save_window,
+    is_video_disabled_override,
+    set_power_save_config,
+    set_video_disabled_override,
+    should_enable_video,
+)
 from stream_lifecycle import detach_client_from_device
 import argparse
 import queue
@@ -380,10 +388,12 @@ def get_unlock_pin():
 def get_power_save_status():
     """Return power-save config plus whether new sessions should enable video."""
     active = is_power_save_window()
+    override = is_video_disabled_override()
     return {
         **get_power_save_config(),
         'active': active,
-        'video_enabled': not active,
+        'video_disabled_override': override,
+        'video_enabled': should_enable_video(),
     }
 
 
@@ -405,7 +415,10 @@ def power_save_config():
 
     payload = request.get_json(silent=True) or {}
     try:
-        set_power_save_config(payload.get('start_hour'), payload.get('end_hour'))
+        if 'start_hour' in payload or 'end_hour' in payload:
+            set_power_save_config(payload.get('start_hour'), payload.get('end_hour'))
+        if 'video_disabled_override' in payload:
+            set_video_disabled_override(payload.get('video_disabled_override'))
     except (TypeError, ValueError):
         return jsonify({'error': 'start_hour and end_hour must be integers from 0 to 23'}), 400
 
