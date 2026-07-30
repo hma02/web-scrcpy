@@ -5,9 +5,11 @@ from scrcpy import (
     get_power_save_config,
     get_power_save_now,
     get_power_save_timezone,
+    get_video_enabled_override,
     is_power_save_window,
     is_video_disabled_override,
     set_power_save_config,
+    set_video_enabled_override,
     set_video_disabled_override,
     should_enable_video,
 )
@@ -392,6 +394,7 @@ def get_power_save_status():
     now = get_power_save_now()
     active = is_power_save_window(now)
     override = is_video_disabled_override()
+    video_enabled_override = get_video_enabled_override()
     return {
         **get_power_save_config(),
         'active': active,
@@ -399,6 +402,8 @@ def get_power_save_status():
         'current_hour': now.hour,
         'current_time': now.strftime('%Y-%m-%d %H:%M:%S %Z'),
         'video_disabled_override': override,
+        'video_enabled_override': video_enabled_override,
+        'video_override_mode': 'auto' if video_enabled_override is None else ('on' if video_enabled_override else 'off'),
         'video_enabled': should_enable_video(now),
     }
 
@@ -423,7 +428,9 @@ def power_save_config():
     try:
         if 'start_hour' in payload or 'end_hour' in payload:
             set_power_save_config(payload.get('start_hour'), payload.get('end_hour'))
-        if 'video_disabled_override' in payload:
+        if 'video_enabled_override' in payload:
+            set_video_enabled_override(payload.get('video_enabled_override'))
+        elif 'video_disabled_override' in payload:
             set_video_disabled_override(payload.get('video_disabled_override'))
     except (TypeError, ValueError):
         return jsonify({'error': 'start_hour and end_hour must be integers from 0 to 23'}), 400

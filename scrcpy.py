@@ -14,6 +14,7 @@ POWER_SAVE_START_ENV = "WEB_SCRCPY_POWER_SAVE_START"
 POWER_SAVE_END_ENV = "WEB_SCRCPY_POWER_SAVE_END"
 POWER_SAVE_TIMEZONE_ENV = "WEB_SCRCPY_POWER_SAVE_TIMEZONE"
 VIDEO_DISABLED_OVERRIDE_ENV = "WEB_SCRCPY_VIDEO_DISABLED_OVERRIDE"
+VIDEO_ENABLED_OVERRIDE_ENV = "WEB_SCRCPY_VIDEO_ENABLED_OVERRIDE"
 DEFAULT_POWER_SAVE_START = "22:00"
 DEFAULT_POWER_SAVE_END = "07:00"
 DEFAULT_POWER_SAVE_TIMEZONE = "America/Toronto"
@@ -59,16 +60,51 @@ def set_power_save_config(start_hour, end_hour):
     return get_power_save_config()
 
 
+def _parse_optional_bool(value):
+    """Parse a JSON/env boolean override, returning None for auto/no override."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.lower()
+        if normalized in {'', 'auto', 'none', 'null'}:
+            return None
+        if normalized in {'1', 'true', 'yes', 'on', 'enabled'}:
+            return True
+        if normalized in {'0', 'false', 'no', 'off', 'disabled'}:
+            return False
+    return bool(value)
+
+
+def set_video_enabled_override(enabled):
+    """Force video on or off; pass None to return to schedule-based behavior."""
+    parsed = _parse_optional_bool(enabled)
+    if parsed is None:
+        os.environ.pop(VIDEO_ENABLED_OVERRIDE_ENV, None)
+    else:
+        os.environ[VIDEO_ENABLED_OVERRIDE_ENV] = '1' if parsed else '0'
+    os.environ[VIDEO_DISABLED_OVERRIDE_ENV] = '1' if parsed is False else '0'
+
+
+def get_video_enabled_override():
+    """Return the manual video override, or None when schedule-based behavior is active."""
+    if VIDEO_ENABLED_OVERRIDE_ENV in os.environ:
+        return _parse_optional_bool(os.environ.get(VIDEO_ENABLED_OVERRIDE_ENV))
+    if os.environ.get(VIDEO_DISABLED_OVERRIDE_ENV, '').lower() in {'1', 'true', 'yes', 'on'}:
+        return False
+    return None
+
+
 def set_video_disabled_override(enabled):
-    """Force video off regardless of the power-save schedule."""
-    if isinstance(enabled, str):
-        enabled = enabled.lower() in {'1', 'true', 'yes', 'on'}
-    os.environ[VIDEO_DISABLED_OVERRIDE_ENV] = '1' if bool(enabled) else '0'
+    """Force video off for backward-compatible callers; false clears the override."""
+    parsed = _parse_optional_bool(enabled)
+    set_video_enabled_override(False if parsed else None)
 
 
 def is_video_disabled_override():
     """Return whether video is manually forced off."""
-    return os.environ.get(VIDEO_DISABLED_OVERRIDE_ENV, '').lower() in {'1', 'true', 'yes', 'on'}
+    return get_video_enabled_override() is False
 
 
 def get_power_save_timezone():
@@ -133,7 +169,10 @@ def is_power_save_window(now=None):
 
 def should_enable_video(now=None):
     """Return whether new or healthy sessions should run scrcpy video."""
-    return not is_video_disabled_override() and not is_power_save_window(now)
+    override = get_video_enabled_override()
+    if override is not None:
+        return override
+    return not is_power_save_window(now)
 
 
 class Scrcpy:

@@ -294,8 +294,8 @@
                     <i class="fa-solid fa-moon"></i> Apply window
                 </button>
                 <span id="powerSaveCurrentHour" class="power-save-field">current_hour: unknown</span>
-                <button id="videoOverrideBtn" class="btn btn-secondary" onclick="toggleVideoDisabledOverride()">
-                    <i class="fa-solid fa-video-slash"></i> Force video off
+                <button id="videoOverrideBtn" class="btn btn-secondary" onclick="toggleVideoEnabledOverride()">
+                    <i class="fa-solid fa-video-slash"></i> Override video: Off
                 </button>
                 <span id="videoEnabledStatus" class="power-save-field">video_enabled: unknown</span>
             </div>
@@ -316,7 +316,7 @@
         let selectedDevices = [];
         let savedPinValue = '';
         let savedPowerSaveConfig = null;
-        let videoDisabledOverride = false;
+        let videoEnabledOverride = null;
 
         function showStatus(message, type) {
             const status = document.getElementById('status');
@@ -375,15 +375,16 @@
         }
 
         function updatePowerSaveStatus(data) {
-            videoDisabledOverride = Boolean(data.video_disabled_override);
+            videoEnabledOverride = data.video_enabled_override;
+            window.latestPowerSaveVideoEnabled = Boolean(data.video_enabled);
             document.getElementById('videoEnabledStatus').textContent =
-                `video_enabled: ${Boolean(data.video_enabled)}; override_off: ${videoDisabledOverride}`;
+                `video_enabled: ${Boolean(data.video_enabled)}; override: ${data.video_override_mode ?? 'auto'}`;
             document.getElementById('powerSaveCurrentHour').textContent =
                 `current_hour: ${data.current_hour ?? 'unknown'} (${data.timezone ?? 'unknown'})`;
             const overrideBtn = document.getElementById('videoOverrideBtn');
-            overrideBtn.innerHTML = videoDisabledOverride
-                ? '<i class="fa-solid fa-video"></i> Clear override'
-                : '<i class="fa-solid fa-video-slash"></i> Force video off';
+            overrideBtn.innerHTML = Boolean(data.video_enabled)
+                ? '<i class="fa-solid fa-video-slash"></i> Override video: Off'
+                : '<i class="fa-solid fa-video"></i> Override video: On';
         }
 
         async function loadPowerSaveConfig() {
@@ -419,17 +420,18 @@
             }
         }
 
-        async function toggleVideoDisabledOverride() {
+        async function toggleVideoEnabledOverride() {
             try {
+                const nextOverride = !Boolean(window.latestPowerSaveVideoEnabled);
                 const response = await fetch('/api/power_save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ video_disabled_override: !videoDisabledOverride })
+                    body: JSON.stringify({ video_enabled_override: nextOverride })
                 });
                 if (!response.ok) throw new Error('Failed to update video override');
                 const data = await response.json();
                 updatePowerSaveStatus(data);
-                showStatus(`Video disabled override ${videoDisabledOverride ? 'enabled' : 'cleared'}. Refreshing...`, 'info');
+                showStatus(`Video override set ${nextOverride ? 'on' : 'off'}. Refreshing...`, 'info');
                 setTimeout(() => window.location.reload(), 500);
             } catch (error) {
                 showStatus(`Error updating video override: ${error.message}`, 'error');
