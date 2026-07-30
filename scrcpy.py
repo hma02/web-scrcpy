@@ -2,11 +2,73 @@ from threading import Thread
 import subprocess
 import socket
 import time
+import os
+from datetime import datetime, time as dt_time
 
 ADB_PATH = "adb"
 SCRCPY_SERVER_PATH = "scrcpy-server"
 DEVICE_SERVER_PATH = "/data/local/tmp/scrcpy-server.jar"
 BASE_PORT = 5555  # base port for multiple devices
+POWER_SAVE_START_ENV = "WEB_SCRCPY_POWER_SAVE_START"
+POWER_SAVE_END_ENV = "WEB_SCRCPY_POWER_SAVE_END"
+DEFAULT_POWER_SAVE_START = "23:00"
+DEFAULT_POWER_SAVE_END = "06:00"
+
+
+def _parse_hhmm(value, default):
+    try:
+        hour, minute = value.split(":", 1)
+        return dt_time(int(hour), int(minute))
+    except (AttributeError, TypeError, ValueError):
+        print(f"Invalid power-save time {value!r}; using {default}")
+        hour, minute = default.split(":", 1)
+        return dt_time(int(hour), int(minute))
+
+
+def _format_hour(hour):
+    return f"{hour:02d}:00"
+
+
+def _time_to_hour(value, default):
+    parsed = _parse_hhmm(value, default)
+    return parsed.hour
+
+
+def get_power_save_config():
+    """Return the active power-save schedule as integer hours for UI/API use."""
+    start_value = os.environ.get(POWER_SAVE_START_ENV, DEFAULT_POWER_SAVE_START)
+    end_value = os.environ.get(POWER_SAVE_END_ENV, DEFAULT_POWER_SAVE_END)
+    return {
+        'start_hour': _time_to_hour(start_value, DEFAULT_POWER_SAVE_START),
+        'end_hour': _time_to_hour(end_value, DEFAULT_POWER_SAVE_END),
+    }
+
+
+def set_power_save_config(start_hour, end_hour):
+    """Set the power-save schedule using integer hours from 0 through 23."""
+    start = int(start_hour)
+    end = int(end_hour)
+    if not 0 <= start <= 23 or not 0 <= end <= 23:
+        raise ValueError('power-save hours must be between 0 and 23')
+    os.environ[POWER_SAVE_START_ENV] = _format_hour(start)
+    os.environ[POWER_SAVE_END_ENV] = _format_hour(end)
+    return get_power_save_config()
+
+
+def is_power_save_window(now=None):
+    """Return True during the overnight no-playback power-save window."""
+    current = (now or datetime.now()).time()
+    start_value = os.environ.get(POWER_SAVE_START_ENV, DEFAULT_POWER_SAVE_START)
+    end_value = os.environ.get(POWER_SAVE_END_ENV, DEFAULT_POWER_SAVE_END)
+    start = _parse_hhmm(start_value, DEFAULT_POWER_SAVE_START)
+    end = _parse_hhmm(end_value, DEFAULT_POWER_SAVE_END)
+
+    if start == end:
+        return False
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end
+
 
 class Scrcpy:
     def __init__(self, device_udid=None):
@@ -32,6 +94,7 @@ class Scrcpy:
         self.control_recv_buffer = bytearray()
         self.health_thread = None
         self._first_video_chunk_logged = False
+        self.video_enabled = True
 
     def list_devices(self):
         """Populate self.devices and assign unique local ports per device."""
@@ -109,11 +172,25 @@ class Scrcpy:
 
         device = self.selected_device
         print(f"Starting scrcpy server on {device}...")
+        server_options = [
+            "tunnel_forward=true",
+            "log_level=VERBOSE",
+            "audio=false",
+            f"video={str(self.video_enabled).lower()}",
+            "control=true",
+        ]
+        if self.video_enabled:
+            server_options.extend([
+                f"video_bit_rate={self.video_bit_rate}",
+                f"max_fps={self.max_fps}",
+            ])
+        else:
+            server_options.append("turn_screen_off=true")
+
         cmd = [
             ADB_PATH, "-s", device, "shell",
             f"CLASSPATH={DEVICE_SERVER_PATH} app_process / com.genymobile.scrcpy.Server 3.1 "
-            f"tunnel_forward=true log_level=VERBOSE audio=false video=true control=true "
-            f"video_bit_rate=" + self.video_bit_rate + " max_fps=" + str(self.max_fps)
+            + " ".join(server_options)
         ]
         self.android_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -325,6 +402,7 @@ class Scrcpy:
         self.device_message_callback = device_message_callback
         self.control_recv_buffer = bytearray()
         self._first_video_chunk_logged = False
+        self.video_enabled = not is_power_save_window()
         self.stop = False
 
         result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True)
@@ -353,15 +431,21 @@ class Scrcpy:
         time.sleep(3)
 
         try:
-            # video connection with retry
-            self.video_socket = self._connect_with_retry("Video", max_retries=30, retry_delay=0.5)
+            if self.video_enabled:
+                # video connection with retry
+                self.video_socket = self._connect_with_retry("Video", max_retries=30, retry_delay=0.5)
+            else:
+                print(f"[{self.selected_device}] Power-save window active: starting scrcpy with no playback and screen off")
 
             # control connection with retry
             self.control_socket = self._connect_with_retry("Control", max_retries=30, retry_delay=0.5)
 
-            self.video_thread = Thread(target=self.receive_video_data, daemon=True)
+            if self.video_enabled:
+                self.video_thread = Thread(target=self.receive_video_data, daemon=True)
+                self.video_thread.start()
+            else:
+                self.video_thread = None
             self.control_thread = Thread(target=self.handle_control_conn, daemon=True)
-            self.video_thread.start()
             self.control_thread.start()
             self.health_thread = Thread(target=self._health_watchdog, daemon=True)
             self.health_thread.start()
@@ -461,10 +545,15 @@ class Scrcpy:
     def is_healthy(self):
         if self.stop or not self.running:
             return False
-        if self.video_socket is None or self.control_socket is None:
+        if self.video_enabled != (not is_power_save_window()):
             return False
-        if self.video_thread is None or not self.video_thread.is_alive():
+        if self.control_socket is None:
             return False
+        if self.video_enabled:
+            if self.video_socket is None:
+                return False
+            if self.video_thread is None or not self.video_thread.is_alive():
+                return False
         if self.control_thread is None or not self.control_thread.is_alive():
             return False
         if self.android_thread is None or not self.android_thread.is_alive():

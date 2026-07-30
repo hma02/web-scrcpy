@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify, redirect
 from flask_socketio import SocketIO, emit, send
-from scrcpy import Scrcpy
+from scrcpy import Scrcpy, get_power_save_config, set_power_save_config
 from stream_lifecycle import detach_client_from_device
 import argparse
 import queue
@@ -383,7 +383,32 @@ def get_stream_config():
     return jsonify({
         'video_bit_rate': str(video_bit_rate),
         'max_fps': int(max_fps),
+        'power_save': get_power_save_config(),
     })
+
+
+@app.route('/api/power_save', methods=['GET', 'POST'])
+def power_save_config():
+    """Read or update the power-save hour window and restart active devices."""
+    if request.method == 'GET':
+        return jsonify(get_power_save_config())
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        config = set_power_save_config(payload.get('start_hour'), payload.get('end_hour'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'start_hour and end_hour must be integers from 0 to 23'}), 400
+
+    restarted = []
+    with state_lock:
+        device_ids = list(device_contexts.keys())
+    for device_udid in device_ids:
+        lock = get_device_lock(device_udid)
+        with lock:
+            if restart_device_context_locked(device_udid):
+                restarted.append(device_udid)
+
+    return jsonify({**config, 'restarted_devices': restarted})
 
 def video_send_task(client_sid, device_udid):
     """Send video data for a specific device to a specific client"""
