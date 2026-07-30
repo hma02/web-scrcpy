@@ -3,6 +3,8 @@ from flask_socketio import SocketIO, emit, send
 from scrcpy import (
     Scrcpy,
     get_power_save_config,
+    get_power_save_now,
+    get_power_save_timezone,
     is_power_save_window,
     is_video_disabled_override,
     set_power_save_config,
@@ -387,13 +389,17 @@ def get_unlock_pin():
 
 def get_power_save_status():
     """Return power-save config plus whether new sessions should enable video."""
-    active = is_power_save_window()
+    now = get_power_save_now()
+    active = is_power_save_window(now)
     override = is_video_disabled_override()
     return {
         **get_power_save_config(),
         'active': active,
+        'timezone': get_power_save_timezone(),
+        'current_hour': now.hour,
+        'current_time': now.strftime('%Y-%m-%d %H:%M:%S %Z'),
         'video_disabled_override': override,
-        'video_enabled': should_enable_video(),
+        'video_enabled': should_enable_video(now),
     }
 
 

@@ -4,6 +4,7 @@ import socket
 import time
 import os
 from datetime import datetime, time as dt_time
+from zoneinfo import ZoneInfo
 
 ADB_PATH = "adb"
 SCRCPY_SERVER_PATH = "scrcpy-server"
@@ -11,9 +12,11 @@ DEVICE_SERVER_PATH = "/data/local/tmp/scrcpy-server.jar"
 BASE_PORT = 5555  # base port for multiple devices
 POWER_SAVE_START_ENV = "WEB_SCRCPY_POWER_SAVE_START"
 POWER_SAVE_END_ENV = "WEB_SCRCPY_POWER_SAVE_END"
+POWER_SAVE_TIMEZONE_ENV = "WEB_SCRCPY_POWER_SAVE_TIMEZONE"
 VIDEO_DISABLED_OVERRIDE_ENV = "WEB_SCRCPY_VIDEO_DISABLED_OVERRIDE"
 DEFAULT_POWER_SAVE_START = "22:00"
 DEFAULT_POWER_SAVE_END = "07:00"
+DEFAULT_POWER_SAVE_TIMEZONE = "America/Toronto"
 
 
 def _parse_hhmm(value, default):
@@ -68,9 +71,19 @@ def is_video_disabled_override():
     return os.environ.get(VIDEO_DISABLED_OVERRIDE_ENV, '').lower() in {'1', 'true', 'yes', 'on'}
 
 
+def get_power_save_timezone():
+    """Return the timezone used for power-save schedule evaluation."""
+    return os.environ.get(POWER_SAVE_TIMEZONE_ENV, DEFAULT_POWER_SAVE_TIMEZONE)
+
+
+def get_power_save_now():
+    """Return the current datetime in the configured power-save timezone."""
+    return datetime.now(ZoneInfo(get_power_save_timezone()))
+
+
 def is_power_save_window(now=None):
     """Return True during the configured no-playback power-save window."""
-    current = (now or datetime.now()).time()
+    current = (now or get_power_save_now()).time()
     current_hour = current.hour
     config = get_power_save_config()
     start_hour = config['start_hour']

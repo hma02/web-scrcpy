@@ -293,6 +293,7 @@
                 <button id="savePowerSaveBtn" class="btn btn-secondary" onclick="savePowerSaveConfig()">
                     <i class="fa-solid fa-moon"></i> Apply window
                 </button>
+                <span id="powerSaveCurrentHour" class="power-save-field">current_hour: unknown</span>
                 <button id="videoOverrideBtn" class="btn btn-secondary" onclick="toggleVideoDisabledOverride()">
                     <i class="fa-solid fa-video-slash"></i> Force video off
                 </button>
@@ -377,6 +378,8 @@
             videoDisabledOverride = Boolean(data.video_disabled_override);
             document.getElementById('videoEnabledStatus').textContent =
                 `video_enabled: ${Boolean(data.video_enabled)}; override_off: ${videoDisabledOverride}`;
+            document.getElementById('powerSaveCurrentHour').textContent =
+                `current_hour: ${data.current_hour ?? 'unknown'} (${data.timezone ?? 'unknown'})`;
             const overrideBtn = document.getElementById('videoOverrideBtn');
             overrideBtn.innerHTML = videoDisabledOverride
                 ? '<i class="fa-solid fa-video"></i> Clear override'

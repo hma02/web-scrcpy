@@ -181,6 +181,7 @@
                     <input id="powerSaveEnd" class="power-save-input" type="number" min="0" max="23" step="1">
                 </label>
                 <button class="control-btn power-save-apply" onclick="savePowerSaveConfig()">Apply & restart</button>
+                <span id="powerSaveCurrentHour" class="power-save-field">current_hour: unknown</span>
                 <button class="control-btn power-save-apply" id="videoOverrideBtn" onclick="toggleVideoDisabledOverride()">Force video off</button>
                 <span id="videoEnabledStatus" class="power-save-field">video_enabled: unknown</span>
             </div>
@@ -307,6 +308,8 @@
             streamConfig.videoDisabledOverride = Boolean(powerSave.video_disabled_override);
             document.getElementById('videoEnabledStatus').textContent =
                 `video_enabled: ${streamConfig.videoEnabled}; override_off: ${streamConfig.videoDisabledOverride}`;
+            document.getElementById('powerSaveCurrentHour').textContent =
+                `current_hour: ${powerSave.current_hour ?? 'unknown'} (${powerSave.timezone ?? 'unknown'})`;
             document.getElementById('videoOverrideBtn').textContent = streamConfig.videoDisabledOverride ? 'Clear override' : 'Force video off';
         }
 
