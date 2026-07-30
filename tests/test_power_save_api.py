@@ -61,6 +61,18 @@ def test_power_save_api_updates_config_and_restarts_watched_context(monkeypatch)
     assert app_module.device_contexts[device].running is True
 
 
+def test_power_save_api_reports_video_enabled_status(monkeypatch):
+    monkeypatch.setattr(app_module, 'is_power_save_window', lambda: True)
+
+    client = app_module.app.test_client()
+    response = client.get('/api/power_save')
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['active'] is True
+    assert payload['video_enabled'] is False
+
+
 def test_power_save_api_rejects_invalid_hours():
     client = app_module.app.test_client()
     response = client.post('/api/power_save', json={'start_hour': 25, 'end_hour': 7})

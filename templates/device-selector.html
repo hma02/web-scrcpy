@@ -293,6 +293,7 @@
                 <button id="savePowerSaveBtn" class="btn btn-secondary" onclick="savePowerSaveConfig()">
                     <i class="fa-solid fa-moon"></i> Apply window
                 </button>
+                <span id="videoEnabledStatus" class="power-save-field">video_enabled: unknown</span>
             </div>
 
             <div class="buttons">
@@ -375,6 +376,7 @@
                 document.getElementById('powerSaveStart').value = data.start_hour;
                 document.getElementById('powerSaveEnd').value = data.end_hour;
                 savedPowerSaveConfig = { start_hour: data.start_hour, end_hour: data.end_hour };
+                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${Boolean(data.video_enabled)}`;
             } catch (error) {
                 console.error('Load power-save config error:', error);
             }
@@ -390,8 +392,10 @@
                     body: JSON.stringify({ start_hour: startHour, end_hour: endHour })
                 });
                 if (!response.ok) throw new Error('Failed to update power-save window');
+                const data = await response.json();
                 savedPowerSaveConfig = { start_hour: startHour, end_hour: endHour };
-                showStatus(`Power-save window updated to ${startHour}:00–${endHour}:00. Refreshing...`, 'info');
+                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${Boolean(data.video_enabled)}`;
+                showStatus(`Power-save window updated to ${startHour}:00–${endHour}:00 (video_enabled: ${Boolean(data.video_enabled)}). Refreshing...`, 'info');
                 setTimeout(() => window.location.reload(), 500);
             } catch (error) {
                 showStatus(`Error saving power-save window: ${error.message}`, 'error');

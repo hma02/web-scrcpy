@@ -181,6 +181,7 @@
                     <input id="powerSaveEnd" class="power-save-input" type="number" min="0" max="23" step="1">
                 </label>
                 <button class="control-btn power-save-apply" onclick="savePowerSaveConfig()">Apply & restart</button>
+                <span id="videoEnabledStatus" class="power-save-field">video_enabled: unknown</span>
             </div>
             <div class="footer-adjust-row">
                 <span>Footer offset</span>
@@ -285,7 +286,7 @@
 
         const muxers = {}, parsers = {}, inputs = {};
         const statsByDevice = {};
-        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown', powerSaveStart: 'unknown', powerSaveEnd: 'unknown' };
+        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown', powerSaveStart: 'unknown', powerSaveEnd: 'unknown', videoEnabled: 'unknown' };
         const FOOTER_OFFSET_STORAGE_KEY = 'debugFooterExtraPx';
         let debugFooterExtraPx = 35;
         const screenPowerOn = Object.fromEntries(deviceNums.map((n) => [n, false]));
@@ -303,6 +304,7 @@
         async function savePowerSaveConfig() {
             const startHour = clampHourInput(document.getElementById('powerSaveStart'));
             const endHour = clampHourInput(document.getElementById('powerSaveEnd'));
+            forceScreenPowerOffForAllConnected();
             try {
                 const response = await fetch('/api/power_save', {
                     method: 'POST',
@@ -310,7 +312,10 @@
                     body: JSON.stringify({ start_hour: startHour, end_hour: endHour })
                 });
                 if (!response.ok) throw new Error('Failed to update power-save window');
-                showEphemeralMessage(`Power-save window set to ${startHour}:00–${endHour}:00; restarting scrcpy and refreshing...`);
+                const data = await response.json();
+                streamConfig.videoEnabled = Boolean(data.video_enabled);
+                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${streamConfig.videoEnabled}`;
+                showEphemeralMessage(`Power-save window set to ${startHour}:00–${endHour}:00; video_enabled=${streamConfig.videoEnabled}; screen off sent; restarting scrcpy and refreshing...`);
                 setTimeout(() => window.location.reload(), 700);
             } catch (e) {
                 showEphemeralMessage(`Power-save update failed: ${e.message}`);
@@ -634,8 +639,10 @@
                 const powerSave = data.power_save || {};
                 streamConfig.powerSaveStart = powerSave.start_hour ?? streamConfig.powerSaveStart;
                 streamConfig.powerSaveEnd = powerSave.end_hour ?? streamConfig.powerSaveEnd;
+                streamConfig.videoEnabled = powerSave.video_enabled ?? streamConfig.videoEnabled;
                 document.getElementById('powerSaveStart').value = streamConfig.powerSaveStart;
                 document.getElementById('powerSaveEnd').value = streamConfig.powerSaveEnd;
+                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${Boolean(streamConfig.videoEnabled)}`;
             } catch (e) {
                 // Keep unknown values in diagnostics footer.
             }
@@ -656,7 +663,7 @@
                     `d${activeDeviceNum} parser name=${s.parserName || 'n/a'} midstream_corruption=${s.parserLikelyMidstreamCorruption ? 'yes' : 'no'}`
                 );
                 lines.push(
-                    `config bitrate=${streamConfig.videoBitRate} max_fps=${streamConfig.maxFps} power_save=${streamConfig.powerSaveStart}:00-${streamConfig.powerSaveEnd}:00`
+                    `config bitrate=${streamConfig.videoBitRate} max_fps=${streamConfig.maxFps} power_save=${streamConfig.powerSaveStart}:00-${streamConfig.powerSaveEnd}:00 video_enabled=${streamConfig.videoEnabled}`
                 );
                 // if (s.parserNameHex) {
                 //     lines.push(`d${activeDeviceNum} parser name_hex=${s.parserNameHex}`);

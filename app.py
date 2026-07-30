@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify, redirect
 from flask_socketio import SocketIO, emit, send
-from scrcpy import Scrcpy, get_power_save_config, set_power_save_config
+from scrcpy import Scrcpy, get_power_save_config, is_power_save_window, set_power_save_config
 from stream_lifecycle import detach_client_from_device
 import argparse
 import queue
@@ -377,13 +377,23 @@ def get_unlock_pin():
     })
 
 
+def get_power_save_status():
+    """Return power-save config plus whether new sessions should enable video."""
+    active = is_power_save_window()
+    return {
+        **get_power_save_config(),
+        'active': active,
+        'video_enabled': not active,
+    }
+
+
 @app.route('/api/stream_config')
 def get_stream_config():
     """Expose active stream configuration for client-side diagnostics."""
     return jsonify({
         'video_bit_rate': str(video_bit_rate),
         'max_fps': int(max_fps),
-        'power_save': get_power_save_config(),
+        'power_save': get_power_save_status(),
     })
 
 
@@ -391,11 +401,11 @@ def get_stream_config():
 def power_save_config():
     """Read or update the power-save hour window and restart active devices."""
     if request.method == 'GET':
-        return jsonify(get_power_save_config())
+        return jsonify(get_power_save_status())
 
     payload = request.get_json(silent=True) or {}
     try:
-        config = set_power_save_config(payload.get('start_hour'), payload.get('end_hour'))
+        set_power_save_config(payload.get('start_hour'), payload.get('end_hour'))
     except (TypeError, ValueError):
         return jsonify({'error': 'start_hour and end_hour must be integers from 0 to 23'}), 400
 
@@ -408,7 +418,7 @@ def power_save_config():
             if restart_device_context_locked(device_udid):
                 restarted.append(device_udid)
 
-    return jsonify({**config, 'restarted_devices': restarted})
+    return jsonify({**get_power_save_status(), 'restarted_devices': restarted})
 
 def video_send_task(client_sid, device_udid):
     """Send video data for a specific device to a specific client"""

@@ -11,8 +11,8 @@ DEVICE_SERVER_PATH = "/data/local/tmp/scrcpy-server.jar"
 BASE_PORT = 5555  # base port for multiple devices
 POWER_SAVE_START_ENV = "WEB_SCRCPY_POWER_SAVE_START"
 POWER_SAVE_END_ENV = "WEB_SCRCPY_POWER_SAVE_END"
-DEFAULT_POWER_SAVE_START = "23:00"
-DEFAULT_POWER_SAVE_END = "06:00"
+DEFAULT_POWER_SAVE_START = "22:00"
+DEFAULT_POWER_SAVE_END = "07:00"
 
 
 def _parse_hhmm(value, default):
@@ -178,14 +178,13 @@ class Scrcpy:
             "audio=false",
             f"video={str(self.video_enabled).lower()}",
             "control=true",
+            "turn_screen_off=true",
         ]
         if self.video_enabled:
             server_options.extend([
                 f"video_bit_rate={self.video_bit_rate}",
                 f"max_fps={self.max_fps}",
             ])
-        else:
-            server_options.append("turn_screen_off=true")
 
         cmd = [
             ADB_PATH, "-s", device, "shell",
