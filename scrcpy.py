@@ -3,7 +3,8 @@ import subprocess
 import socket
 import time
 import os
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ADB_PATH = "adb"
 SCRCPY_SERVER_PATH = "scrcpy-server"
@@ -11,8 +12,14 @@ DEVICE_SERVER_PATH = "/data/local/tmp/scrcpy-server.jar"
 BASE_PORT = 5555  # base port for multiple devices
 POWER_SAVE_START_ENV = "WEB_SCRCPY_POWER_SAVE_START"
 POWER_SAVE_END_ENV = "WEB_SCRCPY_POWER_SAVE_END"
+POWER_SAVE_TIMEZONE_ENV = "WEB_SCRCPY_POWER_SAVE_TIMEZONE"
+VIDEO_DISABLED_OVERRIDE_ENV = "WEB_SCRCPY_VIDEO_DISABLED_OVERRIDE"
+VIDEO_ENABLED_OVERRIDE_ENV = "WEB_SCRCPY_VIDEO_ENABLED_OVERRIDE"
 DEFAULT_POWER_SAVE_START = "22:00"
 DEFAULT_POWER_SAVE_END = "07:00"
+DEFAULT_POWER_SAVE_TIMEZONE = "America/Toronto"
+POWER_SAVE_VIDEO_BIT_RATE = "8000"
+POWER_SAVE_MAX_FPS = 1
 
 
 def _parse_hhmm(value, default):
@@ -55,19 +62,129 @@ def set_power_save_config(start_hour, end_hour):
     return get_power_save_config()
 
 
-def is_power_save_window(now=None):
-    """Return True during the overnight no-playback power-save window."""
-    current = (now or datetime.now()).time()
-    start_value = os.environ.get(POWER_SAVE_START_ENV, DEFAULT_POWER_SAVE_START)
-    end_value = os.environ.get(POWER_SAVE_END_ENV, DEFAULT_POWER_SAVE_END)
-    start = _parse_hhmm(start_value, DEFAULT_POWER_SAVE_START)
-    end = _parse_hhmm(end_value, DEFAULT_POWER_SAVE_END)
+def _parse_optional_bool(value):
+    """Parse a JSON/env boolean override, returning None for auto/no override."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.lower()
+        if normalized in {'', 'auto', 'none', 'null'}:
+            return None
+        if normalized in {'1', 'true', 'yes', 'on', 'enabled'}:
+            return True
+        if normalized in {'0', 'false', 'no', 'off', 'disabled'}:
+            return False
+    return bool(value)
 
-    if start == end:
+
+def set_video_enabled_override(enabled):
+    """Force video on or off; pass None to return to schedule-based behavior."""
+    parsed = _parse_optional_bool(enabled)
+    if parsed is None:
+        os.environ.pop(VIDEO_ENABLED_OVERRIDE_ENV, None)
+    else:
+        os.environ[VIDEO_ENABLED_OVERRIDE_ENV] = '1' if parsed else '0'
+    os.environ[VIDEO_DISABLED_OVERRIDE_ENV] = '1' if parsed is False else '0'
+
+
+def get_video_enabled_override():
+    """Return the manual video override, or None when schedule-based behavior is active."""
+    if VIDEO_ENABLED_OVERRIDE_ENV in os.environ:
+        return _parse_optional_bool(os.environ.get(VIDEO_ENABLED_OVERRIDE_ENV))
+    if os.environ.get(VIDEO_DISABLED_OVERRIDE_ENV, '').lower() in {'1', 'true', 'yes', 'on'}:
         return False
-    if start < end:
-        return start <= current < end
-    return current >= start or current < end
+    return None
+
+
+def set_video_disabled_override(enabled):
+    """Force video off for backward-compatible callers; false clears the override."""
+    parsed = _parse_optional_bool(enabled)
+    set_video_enabled_override(False if parsed else None)
+
+
+def is_video_disabled_override():
+    """Return whether video is manually forced off."""
+    return get_video_enabled_override() is False
+
+
+def get_power_save_timezone():
+    """Return the timezone used for power-save schedule evaluation."""
+    return os.environ.get(POWER_SAVE_TIMEZONE_ENV, DEFAULT_POWER_SAVE_TIMEZONE)
+
+
+def _nth_weekday(year, month, weekday, nth):
+    """Return the day number for the nth weekday in a month."""
+    first = datetime(year, month, 1)
+    days_until_weekday = (weekday - first.weekday()) % 7
+    return 1 + days_until_weekday + (nth - 1) * 7
+
+
+def _is_toronto_dst(utc_now):
+    """Return True when UTC time falls in Toronto daylight saving time."""
+    year = utc_now.year
+    dst_start_day = _nth_weekday(year, 3, 6, 2)
+    dst_end_day = _nth_weekday(year, 11, 6, 1)
+    # Toronto switches at 02:00 local time: 07:00 UTC at spring start, 06:00 UTC at fall end.
+    dst_start_utc = datetime(year, 3, dst_start_day, 7, tzinfo=timezone.utc)
+    dst_end_utc = datetime(year, 11, dst_end_day, 6, tzinfo=timezone.utc)
+    return dst_start_utc <= utc_now < dst_end_utc
+
+
+def _toronto_fallback_now():
+    """Return Toronto time without relying on system tzdata being installed."""
+    utc_now = datetime.now(timezone.utc)
+    offset_hours = -4 if _is_toronto_dst(utc_now) else -5
+    toronto_tz = timezone(timedelta(hours=offset_hours), 'EDT' if offset_hours == -4 else 'EST')
+    return utc_now.astimezone(toronto_tz)
+
+
+def get_power_save_now():
+    """Return the current datetime in the configured power-save timezone."""
+    timezone_name = get_power_save_timezone()
+    if timezone_name == DEFAULT_POWER_SAVE_TIMEZONE:
+        return _toronto_fallback_now()
+    try:
+        return datetime.now(ZoneInfo(timezone_name))
+    except ZoneInfoNotFoundError:
+        print(f"Invalid power-save timezone {timezone_name!r}; using UTC")
+        return datetime.now(timezone.utc)
+
+
+def is_power_save_window(now=None):
+    """Return True during the configured no-playback power-save window."""
+    current = (now or get_power_save_now()).time()
+    current_hour = current.hour
+    config = get_power_save_config()
+    start_hour = config['start_hour']
+    end_hour = config['end_hour']
+
+    if start_hour == end_hour:
+        return False
+    if start_hour < end_hour:
+        return start_hour <= current_hour < end_hour
+
+    # Overnight windows are two explicit ranges: start_hour..24 and 0..end_hour.
+    return start_hour <= current_hour < 24 or 0 <= current_hour < end_hour
+
+
+def should_enable_video(now=None):
+    """Return whether new or healthy sessions should run scrcpy video."""
+    return get_video_enabled_override() is not False
+
+
+def should_use_power_save_video_settings(now=None):
+    """Return whether video should stay on with very low power-save settings."""
+    return get_video_enabled_override() is None and is_power_save_window(now)
+
+
+def get_effective_stream_settings(video_bit_rate, max_fps, now=None):
+    """Return effective video enabled state and stream settings for the current mode."""
+    video_enabled = should_enable_video(now)
+    if video_enabled and should_use_power_save_video_settings(now):
+        return video_enabled, POWER_SAVE_VIDEO_BIT_RATE, POWER_SAVE_MAX_FPS, True
+    return video_enabled, str(video_bit_rate), int(max_fps), False
 
 
 class Scrcpy:
@@ -95,6 +212,9 @@ class Scrcpy:
         self.health_thread = None
         self._first_video_chunk_logged = False
         self.video_enabled = True
+        self.power_save_video_settings = False
+        self.configured_video_bit_rate = None
+        self.configured_max_fps = None
 
     def list_devices(self):
         """Populate self.devices and assign unique local ports per device."""
@@ -395,13 +515,20 @@ class Scrcpy:
         if device_udid:
             self.device_udid = device_udid
             
-        self.video_bit_rate = video_bit_rate
-        self.max_fps = max_fps
+        self.configured_video_bit_rate = video_bit_rate
+        self.configured_max_fps = max_fps
+        self.video_bit_rate = str(video_bit_rate)
+        self.max_fps = int(max_fps)
         self.video_callback = video_callback
         self.device_message_callback = device_message_callback
         self.control_recv_buffer = bytearray()
         self._first_video_chunk_logged = False
-        self.video_enabled = not is_power_save_window()
+        (
+            self.video_enabled,
+            self.video_bit_rate,
+            self.max_fps,
+            self.power_save_video_settings,
+        ) = get_effective_stream_settings(video_bit_rate, max_fps)
         self.stop = False
 
         result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True)
@@ -434,7 +561,7 @@ class Scrcpy:
                 # video connection with retry
                 self.video_socket = self._connect_with_retry("Video", max_retries=30, retry_delay=0.5)
             else:
-                print(f"[{self.selected_device}] Power-save window active: starting scrcpy with no playback and screen off")
+                print(f"[{self.selected_device}] Video override off: starting scrcpy with no playback and screen off")
 
             # control connection with retry
             self.control_socket = self._connect_with_retry("Control", max_retries=30, retry_delay=0.5)
@@ -544,7 +671,16 @@ class Scrcpy:
     def is_healthy(self):
         if self.stop or not self.running:
             return False
-        if self.video_enabled != (not is_power_save_window()):
+        effective = get_effective_stream_settings(
+            self.configured_video_bit_rate or self.video_bit_rate,
+            self.configured_max_fps or self.max_fps,
+        )
+        if (
+            self.video_enabled,
+            str(self.video_bit_rate),
+            int(self.max_fps),
+            self.power_save_video_settings,
+        ) != (effective[0], str(effective[1]), int(effective[2]), effective[3]):
             return False
         if self.control_socket is None:
             return False

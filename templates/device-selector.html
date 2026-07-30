@@ -293,6 +293,10 @@
                 <button id="savePowerSaveBtn" class="btn btn-secondary" onclick="savePowerSaveConfig()">
                     <i class="fa-solid fa-moon"></i> Apply window
                 </button>
+                <span id="powerSaveCurrentHour" class="power-save-field">current_hour: unknown</span>
+                <button id="videoOverrideBtn" class="btn btn-secondary" onclick="toggleVideoEnabledOverride()">
+                    <i class="fa-solid fa-video-slash"></i> Override video: Off
+                </button>
                 <span id="videoEnabledStatus" class="power-save-field">video_enabled: unknown</span>
             </div>
 
@@ -312,6 +316,7 @@
         let selectedDevices = [];
         let savedPinValue = '';
         let savedPowerSaveConfig = null;
+        let videoEnabledOverride = null;
 
         function showStatus(message, type) {
             const status = document.getElementById('status');
@@ -369,6 +374,19 @@
             return value;
         }
 
+        function updatePowerSaveStatus(data) {
+            videoEnabledOverride = data.video_enabled_override;
+            window.latestPowerSaveVideoEnabled = Boolean(data.video_enabled);
+            document.getElementById('videoEnabledStatus').textContent =
+                `video_enabled: ${Boolean(data.video_enabled)}; override: ${data.video_override_mode ?? 'auto'}; low_power_video: ${Boolean(data.power_save_video_settings)}`;
+            document.getElementById('powerSaveCurrentHour').textContent =
+                `current_hour: ${data.current_hour ?? 'unknown'} (${data.timezone ?? 'unknown'})`;
+            const overrideBtn = document.getElementById('videoOverrideBtn');
+            overrideBtn.innerHTML = Boolean(data.video_enabled)
+                ? '<i class="fa-solid fa-video-slash"></i> Override video: Off'
+                : '<i class="fa-solid fa-video"></i> Override video: On';
+        }
+
         async function loadPowerSaveConfig() {
             try {
                 const response = await fetch('/api/power_save', { cache: 'no-store' });
@@ -376,7 +394,7 @@
                 document.getElementById('powerSaveStart').value = data.start_hour;
                 document.getElementById('powerSaveEnd').value = data.end_hour;
                 savedPowerSaveConfig = { start_hour: data.start_hour, end_hour: data.end_hour };
-                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${Boolean(data.video_enabled)}`;
+                updatePowerSaveStatus(data);
             } catch (error) {
                 console.error('Load power-save config error:', error);
             }
@@ -394,11 +412,29 @@
                 if (!response.ok) throw new Error('Failed to update power-save window');
                 const data = await response.json();
                 savedPowerSaveConfig = { start_hour: startHour, end_hour: endHour };
-                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${Boolean(data.video_enabled)}`;
+                updatePowerSaveStatus(data);
                 showStatus(`Power-save window updated to ${startHour}:00–${endHour}:00 (video_enabled: ${Boolean(data.video_enabled)}). Refreshing...`, 'info');
                 setTimeout(() => window.location.reload(), 500);
             } catch (error) {
                 showStatus(`Error saving power-save window: ${error.message}`, 'error');
+            }
+        }
+
+        async function toggleVideoEnabledOverride() {
+            try {
+                const nextOverride = !Boolean(window.latestPowerSaveVideoEnabled);
+                const response = await fetch('/api/power_save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video_enabled_override: nextOverride })
+                });
+                if (!response.ok) throw new Error('Failed to update video override');
+                const data = await response.json();
+                updatePowerSaveStatus(data);
+                showStatus(`Video override set ${nextOverride ? 'on' : 'off'}. Refreshing...`, 'info');
+                setTimeout(() => window.location.reload(), 500);
+            } catch (error) {
+                showStatus(`Error updating video override: ${error.message}`, 'error');
             }
         }
 

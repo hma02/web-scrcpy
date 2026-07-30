@@ -181,6 +181,8 @@
                     <input id="powerSaveEnd" class="power-save-input" type="number" min="0" max="23" step="1">
                 </label>
                 <button class="control-btn power-save-apply" onclick="savePowerSaveConfig()">Apply & restart</button>
+                <span id="powerSaveCurrentHour" class="power-save-field">current_hour: unknown</span>
+                <button class="control-btn power-save-apply" id="videoOverrideBtn" onclick="toggleVideoEnabledOverride()">Override video: Off</button>
                 <span id="videoEnabledStatus" class="power-save-field">video_enabled: unknown</span>
             </div>
             <div class="footer-adjust-row">
@@ -286,7 +288,7 @@
 
         const muxers = {}, parsers = {}, inputs = {};
         const statsByDevice = {};
-        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown', powerSaveStart: 'unknown', powerSaveEnd: 'unknown', videoEnabled: 'unknown' };
+        const streamConfig = { videoBitRate: 'unknown', maxFps: 'unknown', effectiveVideoBitRate: 'unknown', effectiveMaxFps: 'unknown', powerSaveStart: 'unknown', powerSaveEnd: 'unknown', videoEnabled: 'unknown', videoEnabledOverride: null, powerSaveVideoSettings: false };
         const FOOTER_OFFSET_STORAGE_KEY = 'debugFooterExtraPx';
         let debugFooterExtraPx = 35;
         const screenPowerOn = Object.fromEntries(deviceNums.map((n) => [n, false]));
@@ -301,6 +303,35 @@
             return value;
         }
 
+        function updatePowerSaveStatus(powerSave) {
+            streamConfig.videoEnabled = Boolean(powerSave.video_enabled);
+            streamConfig.videoEnabledOverride = powerSave.video_enabled_override;
+            document.getElementById('videoEnabledStatus').textContent =
+                `video_enabled: ${streamConfig.videoEnabled}; override: ${powerSave.video_override_mode ?? 'auto'}`;
+            document.getElementById('powerSaveCurrentHour').textContent =
+                `current_hour: ${powerSave.current_hour ?? 'unknown'} (${powerSave.timezone ?? 'unknown'})`;
+            document.getElementById('videoOverrideBtn').textContent = streamConfig.videoEnabled ? 'Override video: Off' : 'Override video: On';
+        }
+
+        async function toggleVideoEnabledOverride() {
+            const nextOverride = !Boolean(streamConfig.videoEnabled);
+            forceScreenPowerOffForAllConnected();
+            try {
+                const response = await fetch('/api/power_save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video_enabled_override: nextOverride })
+                });
+                if (!response.ok) throw new Error('Failed to update video override');
+                const data = await response.json();
+                updatePowerSaveStatus(data);
+                showEphemeralMessage(`Video override set ${nextOverride ? 'on' : 'off'}; restarting scrcpy and refreshing...`);
+                setTimeout(() => window.location.reload(), 700);
+            } catch (e) {
+                showEphemeralMessage(`Video override update failed: ${e.message}`);
+            }
+        }
+
         async function savePowerSaveConfig() {
             const startHour = clampHourInput(document.getElementById('powerSaveStart'));
             const endHour = clampHourInput(document.getElementById('powerSaveEnd'));
@@ -313,8 +344,7 @@
                 });
                 if (!response.ok) throw new Error('Failed to update power-save window');
                 const data = await response.json();
-                streamConfig.videoEnabled = Boolean(data.video_enabled);
-                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${streamConfig.videoEnabled}`;
+                updatePowerSaveStatus(data);
                 showEphemeralMessage(`Power-save window set to ${startHour}:00–${endHour}:00; video_enabled=${streamConfig.videoEnabled}; screen off sent; restarting scrcpy and refreshing...`);
                 setTimeout(() => window.location.reload(), 700);
             } catch (e) {
@@ -640,9 +670,13 @@
                 streamConfig.powerSaveStart = powerSave.start_hour ?? streamConfig.powerSaveStart;
                 streamConfig.powerSaveEnd = powerSave.end_hour ?? streamConfig.powerSaveEnd;
                 streamConfig.videoEnabled = powerSave.video_enabled ?? streamConfig.videoEnabled;
+                streamConfig.videoEnabledOverride = powerSave.video_enabled_override ?? streamConfig.videoEnabledOverride;
+                streamConfig.powerSaveVideoSettings = powerSave.power_save_video_settings ?? streamConfig.powerSaveVideoSettings;
+                streamConfig.effectiveVideoBitRate = powerSave.effective_video_bit_rate ?? streamConfig.effectiveVideoBitRate;
+                streamConfig.effectiveMaxFps = powerSave.effective_max_fps ?? streamConfig.effectiveMaxFps;
                 document.getElementById('powerSaveStart').value = streamConfig.powerSaveStart;
                 document.getElementById('powerSaveEnd').value = streamConfig.powerSaveEnd;
-                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${Boolean(streamConfig.videoEnabled)}`;
+                updatePowerSaveStatus(powerSave);
             } catch (e) {
                 // Keep unknown values in diagnostics footer.
             }
@@ -663,7 +697,7 @@
                     `d${activeDeviceNum} parser name=${s.parserName || 'n/a'} midstream_corruption=${s.parserLikelyMidstreamCorruption ? 'yes' : 'no'}`
                 );
                 lines.push(
-                    `config bitrate=${streamConfig.videoBitRate} max_fps=${streamConfig.maxFps} power_save=${streamConfig.powerSaveStart}:00-${streamConfig.powerSaveEnd}:00 video_enabled=${streamConfig.videoEnabled}`
+                    `config bitrate=${streamConfig.videoBitRate} max_fps=${streamConfig.maxFps} effective_bitrate=${streamConfig.effectiveVideoBitRate} effective_max_fps=${streamConfig.effectiveMaxFps} low_power_video=${streamConfig.powerSaveVideoSettings} power_save=${streamConfig.powerSaveStart}:00-${streamConfig.powerSaveEnd}:00 video_enabled=${streamConfig.videoEnabled}`
                 );
                 // if (s.parserNameHex) {
                 //     lines.push(`d${activeDeviceNum} parser name_hex=${s.parserNameHex}`);
