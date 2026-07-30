@@ -118,6 +118,30 @@
             color: #e0e0e0;
         }
 
+        .power-save-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .power-save-field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            color: #555;
+            font-size: 12px;
+        }
+
+        .power-save-input {
+            width: 84px;
+            padding: 9px 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
         .status {
             padding: 12px;
             margin-bottom: 16px;
@@ -257,6 +281,21 @@
                 </button>
             </div>
 
+            <div class="power-save-row">
+                <label class="power-save-field">
+                    Power save start hour
+                    <input id="powerSaveStart" class="power-save-input" type="number" min="0" max="23" step="1">
+                </label>
+                <label class="power-save-field">
+                    Power save end hour
+                    <input id="powerSaveEnd" class="power-save-input" type="number" min="0" max="23" step="1">
+                </label>
+                <button id="savePowerSaveBtn" class="btn btn-secondary" onclick="savePowerSaveConfig()">
+                    <i class="fa-solid fa-moon"></i> Apply window
+                </button>
+                <span id="videoEnabledStatus" class="power-save-field">video_enabled: unknown</span>
+            </div>
+
             <div class="buttons">
                 <button class="btn btn-secondary" onclick="scanDevices()">
                     <i class="fa-solid fa-rotate"></i> Refresh
@@ -272,6 +311,7 @@
         let availableDevices = [];
         let selectedDevices = [];
         let savedPinValue = '';
+        let savedPowerSaveConfig = null;
 
         function showStatus(message, type) {
             const status = document.getElementById('status');
@@ -318,6 +358,47 @@
             } catch (error) {
                 showStatus(`Error scanning devices: ${error.message}`, 'error');
                 console.error('Scan error:', error);
+            }
+        }
+
+        function clampHourInput(input) {
+            let value = parseInt(input.value || '0', 10);
+            if (isNaN(value)) value = 0;
+            value = Math.min(23, Math.max(0, value));
+            input.value = value;
+            return value;
+        }
+
+        async function loadPowerSaveConfig() {
+            try {
+                const response = await fetch('/api/power_save', { cache: 'no-store' });
+                const data = await response.json();
+                document.getElementById('powerSaveStart').value = data.start_hour;
+                document.getElementById('powerSaveEnd').value = data.end_hour;
+                savedPowerSaveConfig = { start_hour: data.start_hour, end_hour: data.end_hour };
+                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${Boolean(data.video_enabled)}`;
+            } catch (error) {
+                console.error('Load power-save config error:', error);
+            }
+        }
+
+        async function savePowerSaveConfig() {
+            const startHour = clampHourInput(document.getElementById('powerSaveStart'));
+            const endHour = clampHourInput(document.getElementById('powerSaveEnd'));
+            try {
+                const response = await fetch('/api/power_save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ start_hour: startHour, end_hour: endHour })
+                });
+                if (!response.ok) throw new Error('Failed to update power-save window');
+                const data = await response.json();
+                savedPowerSaveConfig = { start_hour: startHour, end_hour: endHour };
+                document.getElementById('videoEnabledStatus').textContent = `video_enabled: ${Boolean(data.video_enabled)}`;
+                showStatus(`Power-save window updated to ${startHour}:00–${endHour}:00 (video_enabled: ${Boolean(data.video_enabled)}). Refreshing...`, 'info');
+                setTimeout(() => window.location.reload(), 500);
+            } catch (error) {
+                showStatus(`Error saving power-save window: ${error.message}`, 'error');
             }
         }
 
@@ -439,6 +520,7 @@
 
         scanDevices();
         loadPin();
+        loadPowerSaveConfig();
 
         document.getElementById('pinInput').addEventListener('input', () => {
             const pinInput = document.getElementById('pinInput');
